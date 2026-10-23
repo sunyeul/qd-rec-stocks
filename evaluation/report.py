@@ -23,6 +23,9 @@ from shared.archive_format import load_archive
 from .returns import HORIZONS, fetch_closes, forward_returns, window
 
 ROUND_TRIP_COST = 0.002  # 10 bp each way, the whole book turned over each period
+# The horizon every snapshot can be scored on (monthly snapshots up to a month ago);
+# 3m columns are filled where three months have passed.
+PRIMARY = "1m"
 
 
 def _mean_offdiag(m: np.ndarray) -> float:
@@ -37,12 +40,21 @@ def _markdown(df: pd.DataFrame) -> str:
     return "\n".join(["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)] + ["| " + " | ".join(r) + " |" for r in rows])
 
 
+def _forward(closes: pd.DataFrame, t: date, horizon: str) -> pd.Series | None:
+    """Forward returns, or None while the horizon has not passed yet."""
+    try:
+        return forward_returns(closes, t, HORIZONS[horizon])
+    except ValueError:
+        return None
+
+
 def portfolio_metrics(tickers: list[str], closes: pd.DataFrame, t: date) -> dict:
     out = {"n": len(tickers)}
-    for name, days in HORIZONS.items():
-        fwd = forward_returns(closes, t, days)
-        out[f"excess_{name}"] = float(fwd[tickers].mean() - ROUND_TRIP_COST - fwd[BENCHMARK_TICKER])
-    daily = window(closes, t, HORIZONS["3m"])[tickers].pct_change().dropna()
+    for name in HORIZONS:
+        fwd = _forward(closes, t, name)
+        out[f"excess_{name}"] = (float("nan") if fwd is None else
+                                 float(fwd[tickers].mean() - ROUND_TRIP_COST - fwd[BENCHMARK_TICKER]))
+    daily = window(closes, t, HORIZONS[PRIMARY])[tickers].pct_change().dropna()
     out["holding_corr"] = _mean_offdiag(daily.corr().to_numpy())
     return out
 
@@ -53,8 +65,12 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
     emb /= np.linalg.norm(emb, axis=1, keepdims=True)
     evaluated = [e for e in entries if e.get("method") != "seed"]
     scores = pd.Series({tk: e["judgment"]["score"] for tk, e in stock_scores(entries).items()})
-    fwd = forward_returns(closes, t, HORIZONS["3m"])
-    fwd = fwd[scores.index] - fwd[BENCHMARK_TICKER]
+    ic = {}
+    for name in HORIZONS:
+        fwd = _forward(closes, t, name)
+        ok = fwd is not None and len(scores) >= 5
+        ic[f"ic_{name}"] = (float(scores.rank().corr((fwd[scores.index] - fwd[BENCHMARK_TICKER]).rank()))
+                            if ok else float("nan"))
     return {
         "active": len(active),
         "mean_score": float(np.mean([e["judgment"]["score"] for e in active])),
@@ -62,7 +78,7 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
         "stocks_covered": len(scores),
         "verifier_fail_rate": float(np.mean([e.get("admit_path") == "verifier_fail" for e in evaluated]))
         if evaluated else float("nan"),
-        "ic_3m": float(scores.rank().corr(fwd.rank())) if len(scores) >= 5 else float("nan"),
+        **ic,
     }
 
 
@@ -107,7 +123,7 @@ def main(argv=None) -> int:
     df = pd.DataFrame(rows)
     num = df.drop(columns=["t", "portfolio"], errors="ignore")
     summary = num.groupby("method").mean(numeric_only=True)
-    summary["hit_rate_3m"] = df.groupby("method")["excess_3m"].apply(lambda s: float((s > 0).mean()))
+    summary[f"hit_rate_{PRIMARY}"] = df.groupby("method")[f"excess_{PRIMARY}"].apply(lambda s: float((s > 0).mean()))
     summary["periods"] = df.groupby("method").size()
 
     out = Path(args.out)

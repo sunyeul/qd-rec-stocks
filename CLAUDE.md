@@ -17,7 +17,7 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 ## 확정된 결정
 
 - 시장: 미국. PoC 유니버스: S&P 100.
-- 예산: 저예산 PoC 우선. 100종목, 실행당 300회 평가, LLM 변형 3종(Novelty / QD-Rec 숫자만 / QD-Rec 숫자+뉴스), 반복 2회. 검증은 과거 시점 백테스트(분기 말 6개, 3개월 보유)로 하고, 포워드 테스트는 후속(아래 "백테스트로 전환").
+- 예산: 저예산 PoC 우선. 100종목, 실행당 300회 평가, LLM 변형 3종(Novelty / QD-Rec 숫자만 / QD-Rec 숫자+뉴스), 반복 2회. 검증은 과거 시점 백테스트(2026-05~09 월말 5개, 1개월 보유, 실행당 150회)로 하고, 포워드 테스트는 후속(아래 "백테스트로 전환").
 - 모델: 전부 저가 모델. 단 제안자와 심사자는 서로 다른 모델 계열.
 - 평가는 두 층: 개별 종목(IC, 분위 격차, 논리 적중률과 "실력/운" 4분면)과 포트폴리오(비용 차감 초과수익, 샤프, MDD, 종목 간 상관, 팩터 회귀).
 - 커뮤니티 데이터: PoC에서는 제외(RQ4 확장 실험용). Reddit은 앱 등록이 번거로워 보류. StockTwits 공개 스트림을 1순위로 검토 중.
@@ -51,20 +51,20 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 1. **M2 종목 카드** — 구현됨(2026-10-24). `apps/stocks/items.py`(카드), `summaries.py`(뉴스 요약 LLM, `data/cards/`에 캐시), `create_embeddings.py`(요약 → 임베딩 빌드). 스냅샷과 모드는 환경변수 `SNAPSHOT_DATE`, `ANONYMIZE=1`
    - 카드는 영어. 요약 문장에 원문에 없는 숫자가 있으면 그 문장을 버린다(`keep_grounded`)
    - 익명화: 요약 LLM이 이름·제품명을 지우고, `mask_names`가 회사명·티커를 규칙으로 한 번 더 지운다. 제품명은 LLM에만 의존
-   - 남은 일: 재무 스냅샷이 아직 하나도 없어 사업 요약·밸류에이션 칸은 실데이터로 확인 못 함. 전체 100종목 빌드도 안 함(10-22 가격은 5종목 시험분뿐). 요약 모델 기본값은 `openai/gpt-6-luna`(임시, `SUMMARY_MODEL`로 변경)
+   - 남은 일: 재무 스냅샷이 아직 하나도 없어 사업 요약·밸류에이션 칸은 실데이터로 확인 못 함. 전체 100종목 빌드도 안 함(10-22 가격은 5종목 시험분뿐). 요약 모델은 `google/gemini-2.5-flash-lite`
 2. **M3 생성·심사** — 구현됨(2026-10-24), 5종목 시험분으로 시드 3개 + QD-Rec 5회 실행까지 확인. `profiles.py`(기본 프로필 `base`, 실제 보유는 `profiles_private.py`), `prompts.py`, `proposer.py`, `verifier.py`, `evaluation.py`, `seed.py`, `qd_rec.py`
-   - 기본 모델: 제안자 `openai/gpt-6-luna`, 심사자 `deepseek/deepseek-v4-flash`(계열 분리, 둘 다 저가). `PROPOSER_MODEL`, `JUDGE_MODEL`로 변경
+   - 기본 모델: 제안자 `google/gemini-2.5-flash-lite`, 심사자 `openai/gpt-6-luna`(계열 분리, 추론 강도 low). `PROPOSER_MODEL`, `JUDGE_MODEL`로 변경
    - 검증기: thesis·evidence·catalyst·risks의 숫자가 카드나 프로필에 없으면(반올림은 허용) 0점. 루프에서는 아카이브에 넣지 않고 버리고, 시드에서는 다시 생성한다. falsifier·horizon은 기준값을 새로 정하는 칸이라 검사하지 않는다
    - `PER_SECTOR=3`이면 섹터별 시가총액 상위 3개(같은 회사의 다른 주식 종류는 하나만)로 아이템을 줄인다. 아카이브 파일명 태그에 스냅샷·모드·풀이 들어간다(예: `base-2026-10-23-named-top3`)
    - B단계 실행 순서: `$env:PER_SECTOR="3"` → `create_embeddings` → `seed` → `qd_rec --iterations 100`(세 방식: `--method novelty|novelty_evo|qd_rec`)
    - 설계 기준: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
 3. **백테스트로 전환(2026-10-24 결정)** — 블로그용으로 빨리 결론을 내기 위해 PoC의 주 검증을 포워드 3개월에서 과거 시점 백테스트로 바꿨다. 근거와 한계는 `docs/design.md`의 "백테스트로 전환"
-   - 누출 방지: 학습 마감일이 공개된 모델(제안자 gemini-2.5-flash-lite 2025-01-31, 심사자 gpt-5-nano 2024-05-31)과 그 이후 스냅샷만 쓴다. 모델을 바꾸면 날짜도 다시 정한다
+   - 누출 방지: 모든 모델의 학습 마감일 이후 스냅샷만 쓴다(제안자 gemini-2.5-flash-lite 2025-01-31, 심사자 gpt-6-luna 2026-05-18은 제3자 자료 기준). 모델을 바꾸면 `scripts/backtest.py`의 DATES도 다시 정한다
    - `ingest/backfill.py`: 과거 t의 유니버스·가격·재구성 재무(연간 재무제표, 회계연도 종료 + 60일 이후만)·뉴스 → `data/backtest/`
    - `ingest/news_history.py`: 과거 뉴스는 Google News RSS 검색(제목·매체·날짜, t 전날까지만). GDELT는 429로 막힘
    - 변형 3종: `novelty`(숫자+뉴스), `qd_rec_numbers`(`WITH_NEWS=0`), `qd_rec_news`. 아카이브 태그에 뉴스 여부가 들어간다(예: `base-2025-03-31-named-nonews-all`)
    - `portfolio/build.py`: 종목별 최고 점수 상위 N=20, 섹터당 k=3
    - `evaluation/returns.py`, `evaluation/report.py`: t 종가부터 1·3개월 수익, SPY 초과(비용 0.2% 차감), IC, 아카이브 다양성, 보유 기간 상관. 비교 대상은 균등 비중과 12-1 모멘텀
-   - 전체 실행: `uv run python -m scripts.backtest` (분기 말 6개 × 3변형 × 300회, 끝난 단계는 건너뜀) → `reports/backtest.md`
+   - 전체 실행: `uv run python -m scripts.backtest` (월말 5개 × 3변형 × 150회, 끝난 단계는 건너뜀, 키 잔액이 $0.5 미만이면 멈춤) → `reports/backtest.md`
    - 시험(2025-03-31, 10회)에서 본 점: 심사자 gpt-5-nano의 점수가 후하다(평균 8.8, 10점 다수). 변별력이 약하면 심사 기준이나 모델을 손봐야 한다
 4. **포워드 테스트**: 실수집 데이터(`data/snapshots/`)로 후속 진행
