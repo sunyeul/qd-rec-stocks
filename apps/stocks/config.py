@@ -6,15 +6,24 @@ because the shared QD loop calls items.load_items(profile) with no other input:
 
     $env:SNAPSHOT_DATE = "2026-10-22"   # default: the latest universe snapshot
     $env:ANONYMIZE = "1"                # C-### IDs, market-cap buckets, masked names
+    $env:PER_SECTOR = "3"               # only the 3 largest stocks per sector (PoC stage B)
+
+Archive filenames carry the snapshot date and mode in the profile tag, so a
+run never picks up a seed archive built from other cards.
 """
 
 import os
 from pathlib import Path
 
 from ingest.config import DATA_DIR
+from shared.paths import model_tag
+
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 SNAPSHOT_DATE = os.getenv("SNAPSHOT_DATE") or None
 ANONYMIZE = os.getenv("ANONYMIZE", "0") == "1"
+# 0 = every universe stock; N = the N largest by market cap in each sector.
+PER_SECTOR = int(os.getenv("PER_SECTOR", "0"))
 # Seeds the ticker -> C-### shuffle; keep it fixed for the whole experiment.
 ANON_SEED = int(os.getenv("ANON_SEED", "127"))
 
@@ -39,3 +48,31 @@ CARD_TOKEN_LIMIT = 1500
 # Embeddings
 EMBEDDING_DIMENSIONS = 512
 EMBEDDING_CONCURRENCY = 50
+
+# QD_ARCHIVES_ROOT redirects both seed lookup and run output.
+ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives") / "stocks")
+
+# OpenRouter model IDs. The proposer and the judge come from different model
+# families so the judge does not share the proposer's blind spots.
+PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "openai/gpt-6-luna")
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "deepseek/deepseek-v4-flash")
+# Set to an empty string to disable reasoning effort.
+REASONING_EFFORT = os.getenv("REASONING_EFFORT", "medium") or None
+PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)
+JUDGE_SUFFIX = "_judge-" + model_tag(JUDGE_MODEL)
+
+# Seeds Python and NumPy randomness.
+SEED = int(os.getenv("SEED", "0"))
+
+# Random active entries shown as few-shot examples (Novelty+Evo, QD-Rec)
+NUM_CONTEXT_SAMPLES = int(os.getenv("NUM_CONTEXT_SAMPLES", "3"))
+# Nearest neighbors the novelty check compares against
+NUM_NEIGHBORS_NOVELTY = int(os.getenv("NUM_NEIGHBORS_NOVELTY", "3"))
+
+# Seed / QD loop (PoC: 300 evaluations per run)
+NUM_SEEDS = 10
+NUM_ITERATIONS = 300
+NUM_PARALLEL_WORKERS = int(os.getenv("NUM_PARALLEL_WORKERS", "10"))
+
+# Cosine-similarity cutoff for deduplicating additions within a batch.
+DEDUP_SIMILARITY_THRESHOLD = 0.9

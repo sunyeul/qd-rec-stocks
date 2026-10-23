@@ -52,5 +52,11 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
    - 카드는 영어. 요약 문장에 원문에 없는 숫자가 있으면 그 문장을 버린다(`keep_grounded`)
    - 익명화: 요약 LLM이 이름·제품명을 지우고, `mask_names`가 회사명·티커를 규칙으로 한 번 더 지운다. 제품명은 LLM에만 의존
    - 남은 일: 재무 스냅샷이 아직 하나도 없어 사업 요약·밸류에이션 칸은 실데이터로 확인 못 함. 전체 100종목 빌드도 안 함(10-22 가격은 5종목 시험분뿐). 요약 모델 기본값은 `openai/gpt-6-luna`(임시, `SUMMARY_MODEL`로 변경)
-2. **M3 생성·심사**: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
+2. **M3 생성·심사** — 구현됨(2026-10-24), 5종목 시험분으로 시드 3개 + QD-Rec 5회 실행까지 확인. `profiles.py`(기본 프로필 `base`, 실제 보유는 `profiles_private.py`), `prompts.py`, `proposer.py`, `verifier.py`, `evaluation.py`, `seed.py`, `qd_rec.py`
+   - 기본 모델: 제안자 `openai/gpt-6-luna`, 심사자 `deepseek/deepseek-v4-flash`(계열 분리, 둘 다 저가). `PROPOSER_MODEL`, `JUDGE_MODEL`로 변경
+   - 검증기: thesis·evidence·catalyst·risks의 숫자가 카드나 프로필에 없으면(반올림은 허용) 0점. 루프에서는 아카이브에 넣지 않고 버리고, 시드에서는 다시 생성한다. falsifier·horizon은 기준값을 새로 정하는 칸이라 검사하지 않는다
+   - `PER_SECTOR=3`이면 섹터별 시가총액 상위 3개(같은 회사의 다른 주식 종류는 하나만)로 아이템을 줄인다. 아카이브 파일명 태그에 스냅샷·모드·풀이 들어간다(예: `base-2026-10-23-named-top3`)
+   - B단계 실행 순서: `$env:PER_SECTOR="3"` → `create_embeddings` → `seed` → `qd_rec --iterations 100`(세 방식: `--method novelty|novelty_evo|qd_rec`)
+   - 원래 기준
+   제안자 JSON 양식: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
 3. **M4 포트폴리오**(`portfolio/build.py`), **M5 평가 하니스**(`evaluation/`), **M6 포워드 테스트**

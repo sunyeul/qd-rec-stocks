@@ -19,7 +19,7 @@ from . import config, items, summaries
 
 async def main_async(limit: int | None) -> None:
     t = items.snapshot_date()
-    rows = items.load_rows(t)[:limit]
+    rows = items.select_rows(items.load_rows(t), config.PER_SECTOR)[:limit]
     print(f"snapshot {t}, {len(rows)} stocks, {'anonymized' if config.ANONYMIZE else 'named'} cards")
 
     await summaries.build_async(t, rows, config.ANONYMIZE)
