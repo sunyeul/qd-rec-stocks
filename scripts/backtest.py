@@ -23,7 +23,8 @@ from shared.paths import find_latest_archive
 ROOT = Path(__file__).resolve().parent.parent
 # Month ends after the judge's knowledge cutoff (gpt-6-luna, 2026-05-18), up to the last
 # date with a full month of closes before 2026-10-22. Scored on 1-month returns.
-DATES = ["2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-22"]
+# PoC: three dates are enough to see whether the idea works at all.
+DATES = ["2026-05-29", "2026-07-31", "2026-09-22"]
 # name -> (loop method, news on the cards). qd_rec_numbers (no news) is kept for
 # a later comparison but not run by default.
 VARIANTS = {"novelty": ("novelty", True), "qd_rec_numbers": ("qd_rec", False), "qd_rec_news": ("qd_rec", True)}
