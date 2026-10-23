@@ -11,6 +11,7 @@ apps/*/data/*
 
 # qd-rec-stocks
 data/snapshots/
+data/logs/
 archives/
 *.parquet
 apps/stocks/profiles_private.py
