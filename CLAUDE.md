@@ -1,0 +1,59 @@
+# qd-rec-stocks
+
+Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아이디어 발굴에 응용하는 개인 연구 프로젝트.
+"종목 + 투자논리" 아카이브를 진화시키고, 그 논리가 실제 수익과 분산으로 이어지는지 포워드 테스트로 검증한다.
+자동매매나 매매 권유가 아니라 검토 후보를 만드는 도구다.
+
+- 전체 설계 문서: https://claude.ai/artifact/M1W76ZES5xESSbLq5AcFaL (설계 판단은 여기를 기준으로 한다)
+- 원 논문: arXiv 2610.23470
+
+## 환경
+
+- Windows, PowerShell, `uv`, Python 3.10+
+- 리모트: `origin` = 비공개 저장소(sunyeul/qd-rec-stocks), `upstream` = SakanaAI/QD-Rec
+- 원본 업데이트: `git fetch upstream && git merge upstream/main`
+- LLM은 OpenRouter 경유(`.env`의 `OPENROUTER_API_KEY`). `.env`는 커밋하지 않는다.
+
+## 확정된 결정
+
+- 시장: 미국. PoC 유니버스: S&P 100.
+- 예산: 저예산 PoC 우선. 100종목, 실행당 300회 평가, LLM 변형 3종(Novelty / QD-Rec 숫자만 / QD-Rec 숫자+뉴스), 반복 2회, 3개월 포워드, 월 1회 리밸런싱.
+- 모델: 전부 저가 모델. 단 제안자와 심사자는 서로 다른 모델 계열.
+- 평가는 두 층: 개별 종목(IC, 분위 격차, 논리 적중률과 "실력/운" 4분면)과 포트폴리오(비용 차감 초과수익, 샤프, MDD, 종목 간 상관, 팩터 회귀).
+- 커뮤니티 데이터: PoC에서는 제외(RQ4 확장 실험용). Reddit은 앱 등록이 번거로워 보류. StockTwits 공개 스트림을 1순위로 검토 중.
+
+## 미정
+
+- 포트폴리오 N과 테마당 상한 k (추천값 N=20, k=3)
+- 구체적 모델 조합, 월 예산 상한(B단계에서 단가 실측 후), 포워드 테스트 시작일
+
+## 코드 규칙
+
+- `shared/`(원본 코어)는 최소한으로만 수정한다. 새 코드는 `apps/stocks/`, `ingest/`, `portfolio/`, `evaluation/`에 둔다.
+- **누출 방지가 최우선이다.**
+  - 스냅샷 날짜 t의 정보 기준 시각은 t일 뉴욕 16:00(장 마감).
+  - 종목 카드 등 생성 쪽 코드는 `ingest.reader`(`load_asof`, `load_news_asof`)로만 데이터를 읽는다.
+  - t 이후 가격이 필요한 평가 코드는 `evaluation/`에만 두고, 수익률은 t 종가부터 잰다.
+  - 재무 지표(시가총액·PER은 실시간 주가 기반)는 t 마감~다음 개장 사이에 받은 것만 t의 값으로 인정한다.
+- 누출 관련 로직을 바꾸면 `tests/test_ingest.py`에 테스트를 추가한다.
+- 테스트: `uv run python -m pytest tests -q`
+
+## 현재 상태 (2026-10-24)
+
+- [x] 저장소 세팅, 의존성(yfinance 1.7.0, lxml, pytest dev)
+- [x] M1 데이터 수집 `ingest/` 구현·커밋. 사용법과 저장 구조는 `ingest/README.md`
+  - 뉴스: 종목 스트림이 비면 Yahoo 검색으로 대체(`source` 열). 2026-10-22 실행에서 기사가 들어온 것은 확인했으나, 어느 경로에서 왔는지(`[news] stream raw ...` 출력)는 아직 확인 안 함
+- [ ] 작업 스케줄러 등록(매일 07:00 JST, `ingest/README.md` 참고) — 등록 여부 확인 필요. 빠진 날의 뉴스·재무는 복구 불가
+- [ ] StockTwits 접근 확인:
+  `uv run python -c "import requests;r=requests.get('https://api.stocktwits.com/api/2/streams/symbol/AAPL.json',headers={'User-Agent':'Mozilla/5.0'},timeout=20);print(r.status_code, r.text[:300])"`
+  200이면 `ingest/community.py`를 StockTwits로 구현(메시지 시각, 작성자 Bullish/Bearish 라벨, 언급 티커). 403이면 Wikipedia 페이지뷰(관심도)로 대체.
+
+## 다음 단계
+
+1. **M2 종목 카드** (`apps/stocks/`, `apps/companies/`를 참고해 복사·수정)
+   - `items.py`: `load_items`, `item_text`(숫자 블록 + 사업 요약 + 최근 30일 뉴스 요약), `archive_text`, `embedding_text`, `load_item_embeddings`
+   - 뉴스 요약 LLM: 종목·스냅샷당 1회만 만들고 캐시. "사실 / 해석이 갈리는 점"으로 나누고 숫자를 새로 만들지 않게 제한
+   - 익명화 모드: 회사명·티커·제품명을 `C-127` 같은 ID로, 시가총액은 구간으로
+   - 카드당 약 1,500토큰 상한, 512차원 임베딩
+2. **M3 생성·심사**: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
+3. **M4 포트폴리오**(`portfolio/build.py`), **M5 평가 하니스**(`evaluation/`), **M6 포워드 테스트**
