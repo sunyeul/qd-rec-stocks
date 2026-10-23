@@ -9,6 +9,7 @@ the same N and sector cap. Portfolio returns are net of a round-trip cost.
 
 import argparse
 import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -82,6 +83,28 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
     }
 
 
+def _first_sentence(text: str) -> str:
+    return re.split(r"(?<=[.!?])\s", (text or "").strip(), maxsplit=1)[0].replace("|", "/")
+
+
+def pick_rows(entries: list[dict], port: list[dict], closes: pd.DataFrame, t: date) -> list[dict]:
+    """One row per portfolio stock: why it was picked and what it did afterwards."""
+    by_id = {e["entry_id"]: e for e in entries}
+    fwd = {name: _forward(closes, t, name) for name in HORIZONS}
+    rows = []
+    for p in port:
+        f = by_id[p["entry_id"]].get("thesis_fields", {})
+        row = {"ticker": p["ticker"], "sector": p["sector"], "score": p["score"],
+               "thesis": _first_sentence(f.get("thesis")), "catalyst": _first_sentence(f.get("catalyst")),
+               "falsifier": _first_sentence(f.get("falsifier"))}
+        for name, r in fwd.items():
+            ok = r is not None and p["ticker"] in r
+            row[f"ret_{name}"] = round(float(r[p["ticker"]]), 4) if ok else float("nan")
+            row[f"vs_spy_{name}"] = round(float(r[p["ticker"]] - r[BENCHMARK_TICKER]), 4) if ok else float("nan")
+        rows.append(row)
+    return rows
+
+
 def momentum_portfolio(t: date, n: int = N_DEFAULT, k: int = K_DEFAULT) -> list[str]:
     px = reader.load_asof("prices", t)
     uni = reader.load_asof("universe", t)[["ticker", "sector"]]
@@ -113,12 +136,17 @@ def main(argv=None) -> int:
         for name, tickers in (("equal_weight", universes[t]), ("momentum_12_1", momentum_portfolio(t))):
             tickers = [tk for tk in tickers if tk in closes.columns]
             rows.append({"t": t, "method": name, **portfolio_metrics(tickers, closes, t)})
+    picks_md, picks = [], []
     for run in runs:
         t = date.fromisoformat(run["t"])
         entries = load_archive(run["archive"])["entries"]
-        port = [p["ticker"] for p in build(entries) if p["ticker"] in closes.columns]
+        built = [p for p in build(entries) if p["ticker"] in closes.columns]
+        port = [p["ticker"] for p in built]
         rows.append({"t": t, "method": run["method"], **portfolio_metrics(port, closes, t),
                      **archive_metrics(entries, closes, t), "portfolio": " ".join(port)})
+        stock_rows = pick_rows(entries, built, closes, t)
+        picks += [{"t": t, "method": run["method"], **r} for r in stock_rows]
+        picks_md += ["", f"### {t} · {run['method']}", "", _markdown(pd.DataFrame(stock_rows))]
 
     df = pd.DataFrame(rows)
     num = df.drop(columns=["t", "portfolio"], errors="ignore")
@@ -129,10 +157,12 @@ def main(argv=None) -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out.with_suffix(".csv"), index=False)
+    pd.DataFrame(picks).to_csv(out.with_name(out.name + "_picks.csv"), index=False)
     md = ["# Backtest", "", f"Snapshots: {', '.join(map(str, dates))}. Excess = portfolio minus {BENCHMARK_TICKER}, "
           f"net of {ROUND_TRIP_COST:.1%} round trip. N={N_DEFAULT}, at most {K_DEFAULT} per sector.", "",
           "## Mean over snapshots", "", _markdown(summary.round(4).reset_index()), "",
-          "## Per snapshot", "", _markdown(df.round(4))]
+          "## Per snapshot", "", _markdown(df.round(4)), "",
+          "## Picks: why each stock was chosen and what it did next", *picks_md]
     out.with_suffix(".md").write_text("\n".join(md), encoding="utf-8")
     print("\n".join(md[:7]))
     print(f"\n-> {out.with_suffix('.md')}, {out.with_suffix('.csv')}")
