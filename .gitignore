@@ -8,3 +8,9 @@ apps/*/data/*
 !apps/companies/data/universe_example.csv
 # the archive viewer's page template (the repository root ignores *.html)
 !shared/view_archive.html
+
+# qd-rec-stocks
+data/snapshots/
+archives/
+*.parquet
+apps/stocks/profiles_private.py

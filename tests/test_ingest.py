@@ -1,0 +1,190 @@
+"""Leakage and parsing tests for ingest/. No network needed.
+
+    uv run python -m pytest tests -q
+"""
+
+from datetime import date, datetime, timezone
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from ingest import clock, config, news, prices, reader, snapshot
+
+
+@pytest.fixture(autouse=True)
+def tmp_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SNAPSHOT_DIR", tmp_path / "snapshots")
+
+
+# --- clock -----------------------------------------------------------------
+
+def test_snapshot_date_before_and_after_close():
+    # 2026-10-23 is a Friday. 15:00 New York = 19:00 UTC (EDT).
+    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 19, 0, tzinfo=timezone.utc)) == date(2026, 10, 22)
+    # 17:00 New York, after the close settles
+    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 21, 0, tzinfo=timezone.utc)) == date(2026, 10, 23)
+
+
+def test_snapshot_date_weekend_and_monday_morning():
+    sat = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
+    assert clock.latest_snapshot_date(sat) == date(2026, 10, 23)
+    mon_morning = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)  # 10:00 New York
+    assert clock.latest_snapshot_date(mon_morning) == date(2026, 10, 23)
+
+
+def test_snapshot_date_from_tokyo_morning():
+    # 07:00 JST Saturday = 18:00 New York Friday
+    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 22, 0, tzinfo=timezone.utc)) == date(2026, 10, 23)
+
+
+def test_cutoff_is_new_york_close():
+    assert clock.cutoff(date(2026, 10, 23)) == datetime(2026, 10, 23, 20, 0, tzinfo=timezone.utc)  # EDT
+    assert clock.cutoff(date(2026, 12, 4)) == datetime(2026, 12, 4, 21, 0, tzinfo=timezone.utc)  # EST
+
+
+# --- snapshot / reader -----------------------------------------------------
+
+def test_reader_never_returns_a_later_partition():
+    for d, v in [(date(2026, 10, 20), 1), (date(2026, 10, 21), 2), (date(2026, 10, 23), 3)]:
+        snapshot.write(pd.DataFrame({"ticker": ["AAA"], "v": [v]}), "prices", d)
+    assert reader.load_asof("prices", date(2026, 10, 22))["v"].iloc[0] == 2
+    assert reader.load_asof("prices", date(2026, 10, 23))["v"].iloc[0] == 3
+    with pytest.raises(reader.NoSnapshotError):
+        reader.load_asof("prices", date(2026, 10, 19))
+
+
+def test_write_refuses_to_rewrite_history():
+    d = date(2026, 10, 20)
+    snapshot.write(pd.DataFrame({"ticker": ["AAA"]}), "prices", d)
+    with pytest.raises(FileExistsError):
+        snapshot.write(pd.DataFrame({"ticker": ["BBB"]}), "prices", d)
+
+
+def _news_row(id_, ticker, published_at):
+    return {"id": id_, "ticker": ticker, "title": id_, "summary": "", "publisher": "x",
+            "published_at": published_at, "url": "", "content_type": "STORY"}
+
+
+def test_news_cutoff_and_dedup():
+    t = date(2026, 10, 22)
+    # Fetched on t: one article before the close, one after it (published 17:30 New York).
+    snapshot.write(pd.DataFrame([
+        _news_row("before", "AAA", "2026-10-22T19:00:00+00:00"),
+        _news_row("after-close", "AAA", "2026-10-22T21:30:00+00:00"),
+    ]), "news", t)
+    # Fetched on the next day: repeats 'before' and adds a new article.
+    snapshot.write(pd.DataFrame([
+        _news_row("before", "AAA", "2026-10-22T19:00:00+00:00"),
+        _news_row("next-day", "AAA", "2026-10-23T13:00:00+00:00"),
+    ]), "news", date(2026, 10, 23))
+
+    got = reader.load_news_asof(t)
+    assert got["id"].tolist() == ["before"]
+
+    got_next = reader.load_news_asof(date(2026, 10, 23))
+    assert sorted(got_next["id"]) == ["after-close", "before", "next-day"]
+
+
+def test_news_lookback_window():
+    t = date(2026, 10, 22)
+    snapshot.write(pd.DataFrame([
+        _news_row("old", "AAA", "2026-09-01T12:00:00+00:00"),
+        _news_row("recent", "AAA", "2026-10-15T12:00:00+00:00"),
+    ]), "news", t)
+    assert reader.load_news_asof(t, lookback_days=30)["id"].tolist() == ["recent"]
+
+
+# --- prices ----------------------------------------------------------------
+
+def test_price_features_ignore_rows_after_t():
+    idx = pd.bdate_range("2025-01-01", "2026-10-30")
+    close = pd.Series(np.linspace(100, 200, len(idx)), index=idx)
+    volume = pd.Series(1_000.0, index=idx)
+    t = date(2026, 10, 22)
+    feats = prices.compute_features(close, volume, t)
+    assert feats["last_price_date"] == "2026-10-22"
+    assert feats["last_close"] == pytest.approx(close.loc["2026-10-22"])
+    # A spike after t must not change anything.
+    spiked = close.copy()
+    spiked.loc["2026-10-23":] = 10_000
+    assert prices.compute_features(spiked, volume, t) == feats
+
+
+def test_price_features_short_history_is_nan():
+    idx = pd.bdate_range("2026-10-01", "2026-10-22")
+    feats = prices.compute_features(pd.Series(100.0, index=idx), pd.Series(1.0, index=idx), date(2026, 10, 22))
+    assert np.isnan(feats["ret_12m"]) and np.isnan(feats["vol_60d"])
+    assert feats["ret_1m"] == pytest.approx(0.0) or np.isnan(feats["ret_1m"])
+
+
+# --- news parsing ----------------------------------------------------------
+
+def test_parse_news_current_shape():
+    raw = {"id": "abc", "content": {
+        "title": "Company beats estimates", "summary": "Revenue rose.",
+        "pubDate": "2026-10-22T13:05:00Z", "provider": {"displayName": "Reuters"},
+        "canonicalUrl": {"url": "https://example.com/a"}, "contentType": "STORY"}}
+    item = news.parse_item(raw, "AAA")
+    assert item["id"] == "abc" and item["publisher"] == "Reuters"
+    assert pd.Timestamp(item["published_at"]) == pd.Timestamp("2026-10-22T13:05:00Z")
+
+
+def test_parse_news_legacy_shape():
+    raw = {"uuid": "u1", "title": "Old style", "publisher": "AP",
+           "providerPublishTime": 1792674300, "link": "https://example.com/b", "type": "STORY"}
+    item = news.parse_item(raw, "AAA")
+    assert item["id"] == "u1" and item["published_at"].endswith("+00:00")
+
+
+def test_parse_news_drops_items_without_time():
+    assert news.parse_item({"id": "x", "content": {"title": "no date"}}, "AAA") is None
+
+
+# --- fetch window for "as of now" values -------------------------------------
+
+def test_fetch_window_closes_at_next_open():
+    t = date(2026, 10, 22)  # Thursday
+    assert clock.next_open(t) == datetime(2026, 10, 23, 13, 30, tzinfo=timezone.utc)
+    assert clock.in_fetch_window(t, datetime(2026, 10, 22, 22, 0, tzinfo=timezone.utc))  # 07:00 JST Fri
+    # 11:55 New York on Friday: Friday's session has started, so too late for Thursday.
+    assert not clock.in_fetch_window(t, datetime(2026, 10, 23, 15, 55, tzinfo=timezone.utc))
+    assert not clock.in_fetch_window(t, datetime(2026, 10, 22, 19, 0, tzinfo=timezone.utc))  # before close
+
+
+def test_fetch_window_spans_weekend():
+    fri = date(2026, 10, 23)
+    assert clock.next_open(fri) == datetime(2026, 10, 26, 13, 30, tzinfo=timezone.utc)
+    assert clock.in_fetch_window(fri, datetime(2026, 10, 25, 22, 0, tzinfo=timezone.utc))  # 07:00 JST Mon
+
+
+# --- news fallback -----------------------------------------------------------
+
+def test_search_item_related_filter():
+    assert news.related_to({"relatedTickers": ["AAPL", "MSFT"]}, "AAPL")
+    assert not news.related_to({"relatedTickers": ["MSFT"]}, "AAPL")
+    assert news.related_to({}, "AAPL")
+
+
+def test_fetch_one_falls_back_to_search(monkeypatch):
+    import sys, types
+
+    class FakeTicker:
+        def __init__(self, t): pass
+        def get_news(self, count=10, tab="news"): return []
+
+    class FakeSearch:
+        def __init__(self, q, max_results=8, news_count=8):
+            self.news = [
+                {"uuid": "s1", "title": "about AAA", "publisher": "AP", "providerPublishTime": 1792674300,
+                 "link": "https://example.com/s1", "relatedTickers": ["AAA"]},
+                {"uuid": "s2", "title": "about BBB", "publisher": "AP", "providerPublishTime": 1792674300,
+                 "link": "https://example.com/s2", "relatedTickers": ["BBB"]},
+            ]
+
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=FakeTicker, Search=FakeSearch))
+    monkeypatch.setattr(news.time, "sleep", lambda s: None)
+    items, stats = news.fetch_one("AAA")
+    assert [i["id"] for i in items] == ["s1"]
+    assert items[0]["source"] == "search"
+    assert stats == {"ticker": "AAA", "stream_raw": 0, "search_raw": 2, "parsed": 1, "source": "search"}
