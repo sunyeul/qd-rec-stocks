@@ -24,8 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # Month ends after the judge's knowledge cutoff (gpt-6-luna, 2026-05-18), up to the last
 # date with a full month of closes before 2026-10-22. Scored on 1-month returns.
 DATES = ["2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-22"]
-# The design's three variants: name -> (loop method, news on the cards)
+# name -> (loop method, news on the cards). qd_rec_numbers (no news) is kept for
+# a later comparison but not run by default.
 VARIANTS = {"novelty": ("novelty", True), "qd_rec_numbers": ("qd_rec", False), "qd_rec_news": ("qd_rec", True)}
+DEFAULT_VARIANTS = ["novelty", "qd_rec_news"]
 ENV = {"QD_STOCKS_DATA": "data/backtest", "QD_ARCHIVES_ROOT": "archives/backtest",
        "ANONYMIZE": "0", "PER_SECTOR": "0",
        "PYTHONUNBUFFERED": "1"}  # stream each step's progress into the log as it happens
@@ -59,7 +61,7 @@ def latest(tag: str, stage: str) -> str | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
-    ap.add_argument("--variants", default=",".join(VARIANTS), help=f"any of {', '.join(VARIANTS)}")
+    ap.add_argument("--variants", default=",".join(DEFAULT_VARIANTS), help=f"any of {', '.join(VARIANTS)}")
     # 5 dates x 3 variants x 120 evaluations fits a $9 key limit (estimated $0.004 per evaluation).
     ap.add_argument("--iterations", type=int, default=120)
     ap.add_argument("--min-budget", type=float, default=0.5,
