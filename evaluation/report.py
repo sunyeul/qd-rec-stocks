@@ -84,7 +84,8 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
 
 
 def _first_sentence(text: str) -> str:
-    return re.split(r"(?<=[.!?])\s", (text or "").strip(), maxsplit=1)[0].replace("|", "/")
+    # A sentence ends after a word of 3+ lowercase letters, so "U.S." or "& Co." do not cut it.
+    return re.split(r"(?<=[a-z]{3}[.!?])\s", (text or "").strip(), maxsplit=1)[0].replace("|", "/")
 
 
 def pick_rows(entries: list[dict], port: list[dict], closes: pd.DataFrame, t: date) -> list[dict]:
