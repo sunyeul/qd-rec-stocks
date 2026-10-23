@@ -28,6 +28,17 @@ ENV = {"QD_STOCKS_DATA": "data/backtest", "QD_ARCHIVES_ROOT": "archives/backtest
        "ANONYMIZE": "0", "PER_SECTOR": "0"}
 
 
+def remaining_budget() -> float | None:
+    """Dollars left under the OpenRouter key's limit, or None when it has no limit."""
+    import requests
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    data = requests.get("https://openrouter.ai/api/v1/key", timeout=30,
+                        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}).json()["data"]
+    return data.get("limit_remaining")
+
+
 def run(module: str, *args: str, **env: str) -> None:
     cmd = [sys.executable, "-m", module, *args]
     print(f"\n$ {' '.join(f'{k}={v}' for k, v in env.items())} {' '.join(cmd[1:])}", flush=True)
@@ -46,7 +57,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
     ap.add_argument("--variants", default=",".join(VARIANTS), help=f"any of {', '.join(VARIANTS)}")
-    ap.add_argument("--iterations", type=int, default=300)
+    # 100 keeps 6 dates x 3 variants (about $0.004 per evaluation) under a $9 key limit.
+    ap.add_argument("--iterations", type=int, default=100)
+    ap.add_argument("--min-budget", type=float, default=0.5,
+                    help="stop starting new LLM runs when the key has less than this many dollars left")
     ap.add_argument("--manifest", default="archives/backtest/runs.json")
     args = ap.parse_args()
     os.environ.update(ENV)
@@ -54,8 +68,14 @@ def main() -> int:
 
     run("ingest.backfill", "--dates", args.dates)
     runs = []
+    out_of_budget = False
     for t in dates:
         for variant in args.variants.split(","):
+            left = remaining_budget()
+            if left is not None and left < args.min_budget:
+                print(f"\n[budget] ${left:.2f} left, below --min-budget; reporting the {len(runs)} finished runs")
+                out_of_budget = True
+                break
             method, news = VARIANTS[variant]
             env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0"}
             tag = f"base-{t}-named-{'news' if news else 'nonews'}-all"
@@ -69,6 +89,8 @@ def main() -> int:
         manifest = ROOT / args.manifest
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps(runs, indent=1), encoding="utf-8")
+        if out_of_budget:
+            break
 
     run("evaluation.report", "--manifest", args.manifest)
     return 0

@@ -38,7 +38,7 @@ def cards_dir(t, anonymize: bool) -> Path:
 
 
 # Default models have published knowledge cutoffs (gemini-2.5-flash-lite 2025-01-31,
-# gpt-5-nano 2024-05-31), so a backtest on later snapshot dates cannot draw on
+# gpt-5-mini 2024-05-31), so a backtest on later snapshot dates cannot draw on
 # knowledge of what happened next. Change them only together with the backtest dates.
 
 # News summary LLM: one call per stock and snapshot, cached in cards_dir.
@@ -61,9 +61,10 @@ ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives")
 # OpenRouter model IDs. The proposer and the judge come from different model
 # families so the judge does not share the proposer's blind spots.
 PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-2.5-flash-lite")
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/gpt-5-nano")
-# Set to an empty string to disable reasoning effort.
-REASONING_EFFORT = os.getenv("REASONING_EFFORT", "medium") or None
+# gpt-5-nano scored half of a 19-thesis sample 10/10; gpt-5-mini spread the same theses over 5-9.
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/gpt-5-mini")
+# Set to an empty string to disable reasoning effort. "low" scored like "medium" at lower cost.
+REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low") or None
 PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)
 JUDGE_SUFFIX = "_judge-" + model_tag(JUDGE_MODEL)
 
