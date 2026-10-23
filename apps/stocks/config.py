@@ -38,7 +38,8 @@ def cards_dir(t, anonymize: bool) -> Path:
 
 
 # Every default model's knowledge cutoff precedes the backtest snapshots
-# (gemini-2.5-flash-lite 2025-01-31, gpt-6-luna 2026-05-18, the latest), so no
+# (gemini-2.5-flash-lite 2025-01-31, gemini-3.5-flash-lite 2026-03 per Google's
+# model card, gpt-6-luna 2026-05-18, the latest), so no
 # model can know what happened after t. Change them only together with
 # scripts/backtest.py DATES.
 
@@ -61,7 +62,7 @@ ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives")
 
 # OpenRouter model IDs. The proposer and the judge come from different model
 # families so the judge does not share the proposer's blind spots.
-PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-2.5-flash-lite")
+PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-3.5-flash-lite")
 # The judge decides how well scores discriminate, so it gets the strongest model the
 # budget allows (gpt-5-nano scored half of a 19-thesis sample 10/10).
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/gpt-6-luna")

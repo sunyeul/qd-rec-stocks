@@ -58,8 +58,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
     ap.add_argument("--variants", default=",".join(VARIANTS), help=f"any of {', '.join(VARIANTS)}")
-    # 5 dates x 3 variants x 150 evaluations fits a $9 key limit at luna's prices (with margin).
-    ap.add_argument("--iterations", type=int, default=150)
+    # 5 dates x 3 variants x 120 evaluations fits a $9 key limit (estimated $0.004 per evaluation).
+    ap.add_argument("--iterations", type=int, default=120)
     ap.add_argument("--min-budget", type=float, default=0.5,
                     help="stop starting new LLM runs when the key has less than this many dollars left")
     ap.add_argument("--manifest", default="archives/backtest/runs.json")
