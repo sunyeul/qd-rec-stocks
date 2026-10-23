@@ -1,6 +1,7 @@
 """Run the whole backtest: backfill snapshots, build cards, seed, run each method, report.
 
     uv run python -m scripts.backtest                          # default dates and methods
+    uv run python -m scripts.backtest --step 1                 # one more date, then report and stop
     uv run python -m scripts.backtest --iterations 30 --dates 2025-03-31 --variants qd_rec_news   # a quick trial
 
 Every snapshot date is after the knowledge cutoff of the default proposer,
@@ -26,7 +27,8 @@ DATES = ["2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-22"]
 # The design's three variants: name -> (loop method, news on the cards)
 VARIANTS = {"novelty": ("novelty", True), "qd_rec_numbers": ("qd_rec", False), "qd_rec_news": ("qd_rec", True)}
 ENV = {"QD_STOCKS_DATA": "data/backtest", "QD_ARCHIVES_ROOT": "archives/backtest",
-       "ANONYMIZE": "0", "PER_SECTOR": "0"}
+       "ANONYMIZE": "0", "PER_SECTOR": "0",
+       "PYTHONUNBUFFERED": "1"}  # stream each step's progress into the log as it happens
 
 
 def remaining_budget() -> float | None:
@@ -62,6 +64,9 @@ def main() -> int:
     ap.add_argument("--iterations", type=int, default=120)
     ap.add_argument("--min-budget", type=float, default=0.5,
                     help="stop starting new LLM runs when the key has less than this many dollars left")
+    ap.add_argument("--step", type=int, default=0,
+                    help="run LLM work for at most this many unfinished dates, then report on every finished "
+                         "date and stop (0 = all)")
     ap.add_argument("--manifest", default="archives/backtest/runs.json")
     args = ap.parse_args()
     os.environ.update(ENV)
@@ -70,16 +75,29 @@ def main() -> int:
     run("ingest.backfill", "--dates", args.dates)
     runs = []
     out_of_budget = False
+    started = 0
+    variants = args.variants.split(",")
+
+    def tag_of(t, variant):
+        return f"base-{t}-named-{'news' if VARIANTS[variant][1] else 'nonews'}-all"
+
     for t in dates:
-        for variant in args.variants.split(","):
+        unfinished = [v for v in variants if not latest(tag_of(t, v), VARIANTS[v][0])]
+        if unfinished and args.step and started >= args.step:
+            continue  # left for the next --step call
+        started += bool(unfinished)
+        for variant in variants:
+            method, news = VARIANTS[variant]
+            env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0"}
+            tag = tag_of(t, variant)
+            if variant not in unfinished:
+                runs.append({"t": t, "method": variant, "archive": latest(tag, method)})
+                continue
             left = remaining_budget()
             if left is not None and left < args.min_budget:
                 print(f"\n[budget] ${left:.2f} left, below --min-budget; reporting the {len(runs)} finished runs")
                 out_of_budget = True
                 break
-            method, news = VARIANTS[variant]
-            env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0"}
-            tag = f"base-{t}-named-{'news' if news else 'nonews'}-all"
             run("apps.stocks.create_embeddings", **env)
             # Each card variant gets its own seed archive, shared by the methods that use it.
             if not latest(tag, "seed"):
