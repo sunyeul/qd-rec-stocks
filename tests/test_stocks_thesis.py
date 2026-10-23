@@ -82,3 +82,9 @@ def test_failed_number_check_is_discarded_before_novelty(monkeypatch):
     result = asyncio.run(qd_rec.iteration_async("p", {"item_id": "AAPL"}, [seed], [seed], "qd_rec"))
     assert result["action"] == "discarded"
     assert result["new_entry"]["admit_path"] == "verifier_fail"
+
+
+def test_verifier_ignores_holding_periods_but_not_data():
+    fields = {"thesis": "Outperform over a 6 to 12 month horizon and the next 2 quarters; a 6-month view.",
+              "evidence": ["Revenue grew 18% in 12 months"], "catalyst": "", "risks": []}
+    assert verify(fields, CARD, PROFILE)["unmatched"] == ["18"]

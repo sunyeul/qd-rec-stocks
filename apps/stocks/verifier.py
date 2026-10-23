@@ -16,8 +16,13 @@ CHECKED_FIELDS = ("thesis", "evidence", "catalyst", "risks")
 _NUMBER = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 
 
+# Holding periods ("6 to 12 month horizon", "next 2 quarters") are not data claims.
+_PERIOD = re.compile(r"\b\d+(?:\s*(?:-|–|to)\s*\d+)?[\s-]*(?:months?|years?|weeks?|days?|quarters?)\b",
+                     re.IGNORECASE)
+
+
 def _values(text: str) -> list[str]:
-    return [m.replace(",", "").rstrip(".") for m in _NUMBER.findall(text)]
+    return [m.replace(",", "").rstrip(".") for m in _NUMBER.findall(_PERIOD.sub(" ", text))]
 
 
 def _matches(cited: str, allowed: set[float]) -> bool:
