@@ -17,7 +17,7 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 ## 확정된 결정
 
 - 시장: 미국. PoC 유니버스: S&P 100.
-- 예산: 저예산 PoC 우선. 100종목, 실행당 300회 평가, LLM 변형 3종(Novelty / QD-Rec 숫자만 / QD-Rec 숫자+뉴스), 반복 2회, 3개월 포워드, 월 1회 리밸런싱.
+- 예산: 저예산 PoC 우선. 100종목, 실행당 300회 평가, LLM 변형 3종(Novelty / QD-Rec 숫자만 / QD-Rec 숫자+뉴스), 반복 2회. 검증은 과거 시점 백테스트(분기 말 6개, 3개월 보유)로 하고, 포워드 테스트는 후속(아래 "백테스트로 전환").
 - 모델: 전부 저가 모델. 단 제안자와 심사자는 서로 다른 모델 계열.
 - 평가는 두 층: 개별 종목(IC, 분위 격차, 논리 적중률과 "실력/운" 4분면)과 포트폴리오(비용 차감 초과수익, 샤프, MDD, 종목 간 상관, 팩터 회귀).
 - 커뮤니티 데이터: PoC에서는 제외(RQ4 확장 실험용). Reddit은 앱 등록이 번거로워 보류. StockTwits 공개 스트림을 1순위로 검토 중.
@@ -58,4 +58,13 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
    - `PER_SECTOR=3`이면 섹터별 시가총액 상위 3개(같은 회사의 다른 주식 종류는 하나만)로 아이템을 줄인다. 아카이브 파일명 태그에 스냅샷·모드·풀이 들어간다(예: `base-2026-10-23-named-top3`)
    - B단계 실행 순서: `$env:PER_SECTOR="3"` → `create_embeddings` → `seed` → `qd_rec --iterations 100`(세 방식: `--method novelty|novelty_evo|qd_rec`)
    - 설계 기준: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
-3. **M4 포트폴리오**(`portfolio/build.py`), **M5 평가 하니스**(`evaluation/`), **M6 포워드 테스트**
+3. **백테스트로 전환(2026-10-24 결정)** — 블로그용으로 빨리 결론을 내기 위해 PoC의 주 검증을 포워드 3개월에서 과거 시점 백테스트로 바꿨다. 근거와 한계는 `docs/design.md`의 "백테스트로 전환"
+   - 누출 방지: 학습 마감일이 공개된 모델(제안자 gemini-2.5-flash-lite 2025-01-31, 심사자 gpt-5-nano 2024-05-31)과 그 이후 스냅샷만 쓴다. 모델을 바꾸면 날짜도 다시 정한다
+   - `ingest/backfill.py`: 과거 t의 유니버스·가격·재구성 재무(연간 재무제표, 회계연도 종료 + 60일 이후만)·뉴스 → `data/backtest/`
+   - `ingest/news_history.py`: 과거 뉴스는 Google News RSS 검색(제목·매체·날짜, t 전날까지만). GDELT는 429로 막힘
+   - 변형 3종: `novelty`(숫자+뉴스), `qd_rec_numbers`(`WITH_NEWS=0`), `qd_rec_news`. 아카이브 태그에 뉴스 여부가 들어간다(예: `base-2025-03-31-named-nonews-all`)
+   - `portfolio/build.py`: 종목별 최고 점수 상위 N=20, 섹터당 k=3
+   - `evaluation/returns.py`, `evaluation/report.py`: t 종가부터 1·3개월 수익, SPY 초과(비용 0.2% 차감), IC, 아카이브 다양성, 보유 기간 상관. 비교 대상은 균등 비중과 12-1 모멘텀
+   - 전체 실행: `uv run python -m scripts.backtest` (분기 말 6개 × 3변형 × 300회, 끝난 단계는 건너뜀) → `reports/backtest.md`
+   - 시험(2025-03-31, 10회)에서 본 점: 심사자 gpt-5-nano의 점수가 후하다(평균 8.8, 10점 다수). 변별력이 약하면 심사 기준이나 모델을 손봐야 한다
+4. **포워드 테스트**: 실수집 데이터(`data/snapshots/`)로 후속 진행

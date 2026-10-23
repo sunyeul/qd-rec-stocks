@@ -33,7 +33,8 @@ def get_profile_text(name: str) -> str:
 
 def profile_tag(name: str) -> str:
     """The profile's token in archive filenames, with the card snapshot and mode,
-    e.g. base-2026-10-23-named-all or base-2026-10-23-anon-top3. The last part is
-    always present so that one tag is never a prefix of another."""
+    e.g. base-2026-10-23-named-news-all or base-2026-10-23-anon-nonews-top3. Every
+    part is always present so that one tag is never a prefix of another."""
     pool = f"top{config.PER_SECTOR}" if config.PER_SECTOR else "all"
-    return f"{name}-{items.snapshot_date()}-{'anon' if config.ANONYMIZE else 'named'}-{pool}"
+    return (f"{name}-{items.snapshot_date()}-{'anon' if config.ANONYMIZE else 'named'}"
+            f"-{'news' if config.WITH_NEWS else 'nonews'}-{pool}")

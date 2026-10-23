@@ -16,3 +16,4 @@ archives/
 *.parquet
 apps/stocks/profiles_private.py
 data/cards/
+data/backtest/

@@ -22,6 +22,8 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 SNAPSHOT_DATE = os.getenv("SNAPSHOT_DATE") or None
 ANONYMIZE = os.getenv("ANONYMIZE", "0") == "1"
+# "0" leaves the news section off the cards (the numbers-only variant).
+WITH_NEWS = os.getenv("WITH_NEWS", "1") == "1"
 # 0 = every universe stock; N = the N largest by market cap in each sector.
 PER_SECTOR = int(os.getenv("PER_SECTOR", "0"))
 # Seeds the ticker -> C-### shuffle; keep it fixed for the whole experiment.
@@ -35,8 +37,12 @@ def cards_dir(t, anonymize: bool) -> Path:
     return CARDS_DIR / f"snapshot_date={t}" / ("anon" if anonymize else "named")
 
 
+# Default models have published knowledge cutoffs (gemini-2.5-flash-lite 2025-01-31,
+# gpt-5-nano 2024-05-31), so a backtest on later snapshot dates cannot draw on
+# knowledge of what happened next. Change them only together with the backtest dates.
+
 # News summary LLM: one call per stock and snapshot, cached in cards_dir.
-SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "openai/gpt-6-luna")
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "google/gemini-2.5-flash-lite")
 SUMMARY_REASONING_EFFORT = os.getenv("SUMMARY_REASONING_EFFORT", "low") or None
 SUMMARY_CONCURRENCY = int(os.getenv("SUMMARY_CONCURRENCY", "10"))
 # Most recent articles per stock given to the summary LLM.
@@ -54,8 +60,8 @@ ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives")
 
 # OpenRouter model IDs. The proposer and the judge come from different model
 # families so the judge does not share the proposer's blind spots.
-PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "openai/gpt-6-luna")
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "deepseek/deepseek-v4-flash")
+PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-2.5-flash-lite")
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/gpt-5-nano")
 # Set to an empty string to disable reasoning effort.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "medium") or None
 PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)

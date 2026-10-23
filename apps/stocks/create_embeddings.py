@@ -35,7 +35,7 @@ async def main_async(limit: int | None) -> None:
             return await get_embedding_async(text, dimensions=config.EMBEDDING_DIMENSIONS)
 
     vectors = await asyncio.gather(*(embed(s) for s in texts.values()))
-    path = items.embeddings_file(t, config.ANONYMIZE)
+    path = items.embeddings_file(t, config.ANONYMIZE, config.WITH_NEWS)
     store = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     store.update(zip(texts, vectors))
     path.write_text(json.dumps(store), encoding="utf-8")

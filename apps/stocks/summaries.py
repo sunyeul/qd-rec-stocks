@@ -94,19 +94,22 @@ async def summarize_one(row: dict, articles: pd.DataFrame, anonymize: bool) -> d
 
 
 async def build_async(t: date, rows: list[dict], anonymize: bool) -> dict:
-    """Summaries for every row not yet cached; failures are printed and left
-    out, so running again retries only them."""
+    """Summaries for every row not yet cached, or cached from a different number
+    of articles (news added later); failures are printed and left out, so
+    running again retries only them."""
     cache = load(t, anonymize)
     try:
         news = reader.load_news_asof(t)
     except reader.NoSnapshotError:
         news = pd.DataFrame(columns=["ticker"])
-    todo = [r for r in rows if r["ticker"] not in cache]
+    articles_of = {r["ticker"]: news[news["ticker"] == r["ticker"]].head(config.MAX_ARTICLES) for r in rows}
+    todo = [r for r in rows
+            if r["ticker"] not in cache or cache[r["ticker"]].get("n_articles") != len(articles_of[r["ticker"]])]
     sem = asyncio.Semaphore(config.SUMMARY_CONCURRENCY)
 
     async def one(row):
         async with sem:
-            articles = news[news["ticker"] == row["ticker"]].head(config.MAX_ARTICLES)
+            articles = articles_of[row["ticker"]]
             try:
                 cache[row["ticker"]] = await summarize_one(row, articles, anonymize)
                 print(f"[summary] {row['ticker']}: {len(articles)} articles")

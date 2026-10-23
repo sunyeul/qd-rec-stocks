@@ -132,3 +132,9 @@ def test_anon_ids_are_unique_and_stable():
     ids = items.anon_ids(tickers)
     assert len(set(ids.values())) == 100
     assert ids == items.anon_ids(list(reversed(tickers)))
+
+
+def test_numbers_only_card_has_no_news_section():
+    row = {**_card_row(False, facts=["Raised guidance."]), "with_news": False}
+    card = items.item_text(row)
+    assert "Recent news" not in card and "Raised guidance" not in card and "P/E trailing" in card

@@ -188,3 +188,55 @@ def test_fetch_one_falls_back_to_search(monkeypatch):
     assert [i["id"] for i in items] == ["s1"]
     assert items[0]["source"] == "search"
     assert stats == {"ticker": "AAA", "stream_raw": 0, "search_raw": 2, "parsed": 1, "source": "search"}
+
+
+# --- backfill (reconstructed fundamentals) -----------------------------------
+
+def _raw_history():
+    from ingest import backfill  # noqa: F401
+    st = pd.DataFrame({"revenue": [100.0, 120.0], "operating_income": [10.0, 18.0], "net_income": [5.0, 12.0],
+                       "equity": [50.0, 60.0], "debt": [20.0, 30.0]},
+                      index=pd.to_datetime(["2023-12-31", "2024-12-31"]))
+    div = pd.Series([1.0, 1.0, 9.0], index=pd.to_datetime(["2024-06-01", "2025-02-01", "2025-04-15"]).tz_localize("UTC"))
+    return {"info": {"name": "Acme", "industry": "Tools", "business_summary": "", "shares_now": 10.0},
+            "statements": st, "dividends": div}
+
+
+def test_backfill_uses_only_statements_filed_by_t():
+    from ingest import backfill
+    idx = pd.bdate_range("2024-01-01", "2025-06-30")
+    close = pd.Series(np.linspace(10, 20, len(idx)), index=idx)
+    before = backfill.fundamentals_asof(_raw_history(), date(2025, 2, 27), close, close)  # FY2024 + 58 days
+    after = backfill.fundamentals_asof(_raw_history(), date(2025, 3, 3), close, close)
+    assert before["fiscal_year_end"] == "2023-12-31" and before["revenue_growth_yoy"] is None
+    assert after["fiscal_year_end"] == "2024-12-31"
+    assert after["revenue_growth_yoy"] == pytest.approx(0.2)
+    price_t = close[close.index.date <= date(2025, 3, 3)].iloc[-1]
+    assert after["market_cap"] == pytest.approx(10 * price_t)  # no close after t
+    assert after["pe_trailing"] == pytest.approx(10 * price_t / 12)
+    # the 2025-04-15 dividend is after t; the 2024-06-01 one is inside the trailing year
+    assert after["dividend_yield"] == pytest.approx(2.0 / price_t * 100)
+
+
+# --- news_history (Google News RSS) -----------------------------------------
+
+_RSS = """<rss><channel>
+<item><title>Abbott beats estimates - Reuters</title><link>https://x/1</link><guid>g1</guid>
+<pubDate>Sun, 30 Mar 2025 07:00:00 GMT</pubDate><source url="https://reuters.com">Reuters</source></item>
+<item><title>Abbott news on the day - Reuters</title><link>https://x/2</link><guid>g2</guid>
+<pubDate>Mon, 31 Mar 2025 07:00:00 GMT</pubDate><source url="https://reuters.com">Reuters</source></item>
+</channel></rss>"""
+
+
+def test_news_history_keeps_only_days_before_t():
+    from ingest import news_history
+    rows = news_history.parse_rss(_RSS, "ABT", date(2025, 3, 31))
+    assert [r["id"] for r in rows] == ["g1"]  # dated t itself: time of day unknown, could be after the close
+    assert rows[0]["title"] == "Abbott beats estimates" and rows[0]["publisher"] == "Reuters"
+
+
+def test_news_history_search_name():
+    from ingest.news_history import search_name
+    assert search_name("Walt Disney Company (The)") == "Walt Disney"
+    assert search_name("Apple Inc.") == "Apple"
+    assert search_name("Lowe's Companies, Inc.") == "Lowe's"

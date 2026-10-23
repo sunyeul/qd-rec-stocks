@@ -95,7 +95,8 @@ def attach_summaries(rows: list[dict], t: date, anonymize: bool) -> list[dict]:
             f"{len(missing)} stocks have no summary for {t} ({missing[:5]}...). "
             "Run `uv run python -m apps.stocks.create_embeddings` first."
         )
-    return [{**r, "item_id": r["ticker"], "anonymized": anonymize, "news": cache[r["ticker"]]} for r in rows]
+    return [{**r, "item_id": r["ticker"], "anonymized": anonymize, "with_news": config.WITH_NEWS,
+             "news": cache[r["ticker"]]} for r in rows]
 
 
 def load_items(profile: str) -> list[dict]:
@@ -221,11 +222,12 @@ def item_text(row: dict) -> str:
             news_lines += ["Facts:"] + [f"- {b}" for b in facts]
         if contested:
             news_lines += ["Where readings differ:"] + [f"- {b}" for b in contested]
+        news_block = (["", "## Recent news (last 30 days, published before the close)", *news_lines]
+                      if row.get("with_news", True) else [])
         return "\n".join([
             header, "",
             f"## Numbers (as of the close on {row['snapshot_date']})", *numbers, "",
-            "## Business", business or "(not available)", "",
-            "## Recent news (last 30 days, published before the close)", *news_lines,
+            "## Business", business or "(not available)", *news_block,
         ])
 
     text = render()
@@ -247,13 +249,13 @@ def embedding_text(row: dict) -> str:
     return item_text(row)
 
 
-def embeddings_file(t: date, anonymize: bool):
-    return config.cards_dir(t, anonymize) / "embeddings.json"
+def embeddings_file(t: date, anonymize: bool, with_news: bool = True):
+    return config.cards_dir(t, anonymize) / ("embeddings.json" if with_news else "embeddings_nonews.json")
 
 
 def load_item_embeddings(profile: str) -> dict[str, list[float]]:
     """{item_id: embedding} for the configured snapshot and mode (the same for every profile)."""
-    path = embeddings_file(snapshot_date(), config.ANONYMIZE)
+    path = embeddings_file(snapshot_date(), config.ANONYMIZE, config.WITH_NEWS)
     if not path.exists():
         return {}  # shared.embeddings.require_item_embeddings explains what to run
     return json.loads(path.read_text(encoding="utf-8"))
