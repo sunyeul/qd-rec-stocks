@@ -6,9 +6,16 @@ PROFILES dict; its entries are added to, or replace, the ones below.
 
 from . import config, items
 
-DEFAULT_PROFILE = "base"
+# "neutral" asks only for market-beating stocks, so the theses argue from each stock's
+# own evidence; "base" adds holdings and a risk limit, which made most theses open with
+# "diversify away from tech" and repeat the -30% limit as their falsifier.
+DEFAULT_PROFILE = "neutral"
 
 PROFILES = {
+    "neutral": """Investor profile
+- Horizon: hold for 3 to 12 months.
+- Objective: beat the S&P 500 after costs.
+- Constraints: US large caps only; long only, no leverage, no options.""",
     "base": """Investor profile
 - Horizon: hold for 3 to 12 months.
 - Objective: beat the S&P 500 after costs, with drawdowns no worse than the market's.

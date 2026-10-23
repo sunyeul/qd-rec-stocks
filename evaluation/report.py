@@ -2,9 +2,10 @@
 
     uv run python -m evaluation.report --manifest archives/backtest/runs.json
 
-The manifest (written by scripts/backtest.py) lists {"t", "method", "archive"}.
-Baselines per t: the equal-weight universe and a 12-1 momentum portfolio with
-the same N and sector cap. Portfolio returns are net of a round-trip cost.
+The manifest (written by scripts/backtest.py) lists {"t", "method", "archive"}; a
+sibling *_costs.json gives each run's spend and minutes. The baseline per t is the
+equal-weight universe (SPY is the zero line). Portfolio returns are net of a
+round-trip cost. The picks and "How QD-Rec got there" sections are written for the blog.
 """
 
 import argparse
@@ -106,6 +107,46 @@ def pick_rows(entries: list[dict], port: list[dict], closes: pd.DataFrame, t: da
     return rows
 
 
+def qd_traits(entries: list[dict]) -> list[str]:
+    """Markdown showing what makes the run QD-Rec: evolution, novelty gating, the
+    archive's quality over time, item selection, and the spread of ideas."""
+    by_id = {e["entry_id"]: e for e in entries}
+    evaluated = sorted((e for e in entries if e.get("method") != "seed"), key=lambda e: e["created_at"])
+    active = [e for e in entries if e["status"] == "active"]
+    count = lambda xs: ", ".join(f"{k} {v}" for k, v in pd.Series(xs).value_counts().items())
+    say = lambda e: f"{e['item_id']} ({e['judgment']['score']}): {_first_sentence(e.get('thesis_fields', {}).get('thesis'))}"
+    batches = [evaluated[i:i + 10] for i in range(0, len(evaluated), 10)]
+    curve = " → ".join(f"{np.mean([e['judgment']['score'] for e in b]):.1f}" for b in batches)
+    visits = pd.Series([e["item_id"] for e in evaluated]).value_counts()
+    out = [
+        f"- Evaluations: {len(evaluated)}; archive at the end: {len(active)} active ideas on "
+        f"{len({e['item_id'] for e in active})} stocks",
+        f"- How each new thesis was made: {count([(e.get('evolution') or {}).get('operation', 'zero-shot') for e in evaluated])}",
+        f"- What happened to it: {count([e.get('admit_path') for e in evaluated])}",
+        f"- Mean judge score per batch of 10, in order: {curve}",
+        f"- Stocks evaluated: {len(visits)} distinct; most visited: "
+        + ", ".join(f"{tk} ×{n}" for tk, n in visits.head(5).items()),
+    ]
+    child = max((e for e in active if (e.get("evolution") or {}).get("operation") in ("mutate", "crossover")
+                 and e["evolution"].get("evo_parent_entry_ids")), key=lambda e: e["judgment"]["score"], default=None)
+    if child:
+        parents = [by_id[p] for p in child["evolution"]["evo_parent_entry_ids"] if p in by_id]
+        out += ["", f"**Evolution example ({child['evolution']['operation']}):**"]
+        out += [f"- parent {say(p)}" for p in parents]
+        out += [f"- child {say(child)}", f"- note: {child['evolution'].get('evolution_note', '')}"]
+    swap = next((e for e in evaluated if e.get("replaces_entry_id") in by_id), None)
+    if swap:
+        out += ["", "**Replacement example (a similar idea; the blind duel preferred the new one, "
+                    "which need not have the higher judge score):**",
+                f"- old {say(by_id[swap['replaces_entry_id']])}", f"- new {say(swap)}"]
+    out += ["", "**All active ideas, by sector:**"]
+    by_sector: dict[str, list[dict]] = {}
+    for e in sorted(active, key=lambda e: -e["judgment"]["score"]):
+        by_sector.setdefault(e.get("sector") or "unknown", []).append(e)
+    out += [f"- {sector}: " + "; ".join(say(e) for e in group) for sector, group in sorted(by_sector.items())]
+    return out
+
+
 def momentum_portfolio(t: date, n: int = N_DEFAULT, k: int = K_DEFAULT) -> list[str]:
     px = reader.load_asof("prices", t)
     uni = reader.load_asof("universe", t)[["ticker", "sector"]]
@@ -132,22 +173,26 @@ def main(argv=None) -> int:
     all_tickers = sorted({tk for u in universes.values() for tk in u} | {BENCHMARK_TICKER})
     closes = fetch_closes(all_tickers, dates[0], date.today())
 
+    costs_file = Path(args.manifest.replace(".json", "_costs.json"))
+    costs = json.loads(costs_file.read_text(encoding="utf-8")) if costs_file.exists() else {}
+
     rows = []
     for t in dates:
-        for name, tickers in (("equal_weight", universes[t]), ("momentum_12_1", momentum_portfolio(t))):
-            tickers = [tk for tk in tickers if tk in closes.columns]
-            rows.append({"t": t, "method": name, **portfolio_metrics(tickers, closes, t)})
-    picks_md, picks = [], []
+        tickers = [tk for tk in universes[t] if tk in closes.columns]
+        rows.append({"t": t, "method": "equal_weight", **portfolio_metrics(tickers, closes, t)})
+    picks_md, picks, traits_md = [], [], []
     for run in runs:
         t = date.fromisoformat(run["t"])
         entries = load_archive(run["archive"])["entries"]
         built = [p for p in build(entries) if p["ticker"] in closes.columns]
         port = [p["ticker"] for p in built]
         rows.append({"t": t, "method": run["method"], **portfolio_metrics(port, closes, t),
-                     **archive_metrics(entries, closes, t), "portfolio": " ".join(port)})
+                     **archive_metrics(entries, closes, t), **costs.get(run["archive"], {}),
+                     "portfolio": " ".join(port)})
         stock_rows = pick_rows(entries, built, closes, t)
         picks += [{"t": t, "method": run["method"], **r} for r in stock_rows]
         picks_md += ["", f"### {t} · {run['method']}", "", _markdown(pd.DataFrame(stock_rows))]
+        traits_md += ["", f"### {t} · {run['method']}", "", *qd_traits(entries)]
 
     df = pd.DataFrame(rows)
     num = df.drop(columns=["t", "portfolio"], errors="ignore")
@@ -163,7 +208,8 @@ def main(argv=None) -> int:
           f"net of {ROUND_TRIP_COST:.1%} round trip. N={N_DEFAULT}, at most {K_DEFAULT} per sector.", "",
           "## Mean over snapshots", "", _markdown(summary.round(4).reset_index()), "",
           "## Per snapshot", "", _markdown(df.round(4)), "",
-          "## Picks: why each stock was chosen and what it did next", *picks_md]
+          "## Picks: why each stock was chosen and what it did next", *picks_md, "",
+          "## How QD-Rec got there", *traits_md]
     out.with_suffix(".md").write_text("\n".join(md), encoding="utf-8")
     print("\n".join(md[:7]))
     print(f"\n-> {out.with_suffix('.md')}, {out.with_suffix('.csv')}")

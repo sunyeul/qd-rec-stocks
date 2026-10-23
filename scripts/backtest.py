@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from shared.archive_format import load_archive
@@ -29,20 +30,35 @@ DATES = ["2026-05-29", "2026-07-31", "2026-09-22"]
 # how it turned out, so only qd_rec_news runs by default; the others stay as options.
 VARIANTS = {"novelty": ("novelty", True), "qd_rec_numbers": ("qd_rec", False), "qd_rec_news": ("qd_rec", True)}
 DEFAULT_VARIANTS = ["qd_rec_news"]
+# One contrast run: Novelty (random stocks, no few-shot evolution) on the first date only,
+# to show what QD-Rec's selection and evolution add.
+CONTRAST = {"2026-05-29": ["novelty"]}
 ENV = {"QD_STOCKS_DATA": "data/backtest", "QD_ARCHIVES_ROOT": "archives/backtest",
        "ANONYMIZE": "0", "PER_SECTOR": "0",
        "PYTHONUNBUFFERED": "1"}  # stream each step's progress into the log as it happens
 
 
-def remaining_budget() -> float | None:
-    """Dollars left under the OpenRouter key's limit, or None when it has no limit."""
+def key_status() -> dict:
+    """The OpenRouter key's spend so far ("usage") and "limit_remaining" (None without a limit)."""
     import requests
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
-    data = requests.get("https://openrouter.ai/api/v1/key", timeout=30,
+    return requests.get("https://openrouter.ai/api/v1/key", timeout=30,
                         headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}).json()["data"]
-    return data.get("limit_remaining")
+
+
+def remaining_budget() -> float | None:
+    return key_status().get("limit_remaining")
+
+
+def settled_usage() -> float:
+    """Spend so far, after a pause: OpenRouter books costs with a delay of some seconds.
+
+    shortcut: per-run costs can still leak a little into the next run; the total is exact.
+    """
+    time.sleep(30)
+    return key_status()["usage"]
 
 
 def run(module: str, *args: str, **env: str) -> None:
@@ -63,7 +79,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
     ap.add_argument("--variants", default=",".join(DEFAULT_VARIANTS), help=f"any of {', '.join(VARIANTS)}")
-    # 5 dates x 3 variants x 120 evaluations fits a $9 key limit (estimated $0.004 per evaluation).
+    # About $0.003 per evaluation measured, so 3 dates (+1 contrast run) cost roughly $1.5-2.
     ap.add_argument("--iterations", type=int, default=120)
     ap.add_argument("--min-budget", type=float, default=0.5,
                     help="stop starting new LLM runs when the key has less than this many dollars left")
@@ -76,15 +92,22 @@ def main() -> int:
     dates = args.dates.split(",")
 
     run("ingest.backfill", "--dates", args.dates)
+    from apps.stocks.profiles import DEFAULT_PROFILE
+
     runs = []
     out_of_budget = False
     started = 0
-    variants = args.variants.split(",")
+    # Spend and wall time per finished run, kept across calls for the report.
+    costs_file = ROOT / args.manifest.replace(".json", "_costs.json")
+    costs = json.loads(costs_file.read_text(encoding="utf-8")) if costs_file.exists() else {}
 
     def tag_of(t, variant):
-        return f"base-{t}-named-{'news' if VARIANTS[variant][1] else 'nonews'}-all"
+        return f"{DEFAULT_PROFILE}-{t}-named-{'news' if VARIANTS[variant][1] else 'nonews'}-all"
 
     for t in dates:
+        variants = args.variants.split(",")
+        if args.variants == ",".join(DEFAULT_VARIANTS):
+            variants += CONTRAST.get(t, [])
         unfinished = [v for v in variants if not latest(tag_of(t, v), VARIANTS[v][0])]
         if unfinished and args.step and started >= args.step:
             continue  # left for the next --step call
@@ -101,13 +124,19 @@ def main() -> int:
                 print(f"\n[budget] ${left:.2f} left, below --min-budget; reporting the {len(runs)} finished runs")
                 out_of_budget = True
                 break
+            spent, started_at = settled_usage(), time.time()
             run("apps.stocks.create_embeddings", **env)
             # Each card variant gets its own seed archive, shared by the methods that use it.
             if not latest(tag, "seed"):
                 run("apps.stocks.seed", **env)
             if not latest(tag, method):
                 run("apps.stocks.qd_rec", "--method", method, "--iterations", str(args.iterations), **env)
-            runs.append({"t": t, "method": variant, "archive": latest(tag, method)})
+            archive = latest(tag, method)
+            # Includes this date's cards and seed when this run was the first to need them.
+            costs[archive] = {"cost": round(settled_usage() - spent, 4),
+                              "minutes": round((time.time() - started_at) / 60, 1)}
+            costs_file.write_text(json.dumps(costs, indent=1), encoding="utf-8")
+            runs.append({"t": t, "method": variant, "archive": archive})
         manifest = ROOT / args.manifest
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps(runs, indent=1), encoding="utf-8")
