@@ -43,10 +43,8 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 - [x] 저장소 세팅, 의존성(yfinance 1.7.0, lxml, pytest dev)
 - [x] M1 데이터 수집 `ingest/` 구현·커밋. 사용법과 저장 구조는 `ingest/README.md`
   - 뉴스: 종목 스트림이 비면 Yahoo 검색으로 대체(`source` 열). 2026-10-22 실행에서 기사가 들어온 것은 확인했으나, 어느 경로에서 왔는지(`[news] stream raw ...` 출력)는 아직 확인 안 함
-- [ ] 작업 스케줄러 등록(매일 07:00 JST, `ingest/README.md` 참고) — 등록 여부 확인 필요. 빠진 날의 뉴스·재무는 복구 불가
-- [ ] StockTwits 접근 확인:
-  `uv run python -c "import requests;r=requests.get('https://api.stocktwits.com/api/2/streams/symbol/AAPL.json',headers={'User-Agent':'Mozilla/5.0'},timeout=20);print(r.status_code, r.text[:300])"`
-  200이면 `ingest/community.py`를 StockTwits로 구현(메시지 시각, 작성자 Bullish/Bearish 라벨, 언급 티커). 403이면 Wikipedia 페이지뷰(관심도)로 대체.
+- [x] 작업 스케줄러 등록 확인("qd-rec-stocks ingest", 매일 07:00 JST, 첫 실행 2026-10-24 예정). `DisallowStartIfOnBatteries`가 켜져 있어 배터리로 돌 때는 건너뛴다. 빠진 날의 뉴스·재무는 복구 불가
+- [x] StockTwits 접근 확인(2026-10-24): 403(Cloudflare "Just a moment..." 차단 페이지). 커뮤니티 데이터는 Wikipedia 페이지뷰(관심도)로 대체한다(RQ4 확장용, PoC 범위 밖)
 
 ## 다음 단계
 
