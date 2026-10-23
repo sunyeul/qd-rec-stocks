@@ -4,7 +4,7 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 "종목 + 투자논리" 아카이브를 진화시키고, 그 논리가 실제 수익과 분산으로 이어지는지 포워드 테스트로 검증한다.
 자동매매나 매매 권유가 아니라 검토 후보를 만드는 도구다.
 
-- 전체 설계 문서: https://claude.ai/artifact/M1W76ZES5xESSbLq5AcFaL (설계 판단은 여기를 기준으로 한다)
+- 전체 설계 문서: `docs/design.md` (설계 판단은 여기를 기준으로 하고, 설계가 바뀌면 이 파일을 고친다)
 - 원 논문: arXiv 2610.23470
 
 ## 환경
