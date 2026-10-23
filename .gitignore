@@ -14,4 +14,4 @@ data/snapshots/
 data/logs/
 archives/
 *.parquet
-apps/stocks/profiles_private.py
+apps/stocks/profiles_private.pydata/cards/

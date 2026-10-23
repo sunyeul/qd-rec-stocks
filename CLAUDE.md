@@ -48,10 +48,9 @@ Sakana AI의 [QD-Rec](https://github.com/SakanaAI/QD-Rec)을 미국 주식 아�
 
 ## 다음 단계
 
-1. **M2 종목 카드** (`apps/stocks/`, `apps/companies/`를 참고해 복사·수정)
-   - `items.py`: `load_items`, `item_text`(숫자 블록 + 사업 요약 + 최근 30일 뉴스 요약), `archive_text`, `embedding_text`, `load_item_embeddings`
-   - 뉴스 요약 LLM: 종목·스냅샷당 1회만 만들고 캐시. "사실 / 해석이 갈리는 점"으로 나누고 숫자를 새로 만들지 않게 제한
-   - 익명화 모드: 회사명·티커·제품명을 `C-127` 같은 ID로, 시가총액은 구간으로
-   - 카드당 약 1,500토큰 상한, 512차원 임베딩
+1. **M2 종목 카드** — 구현됨(2026-10-24). `apps/stocks/items.py`(카드), `summaries.py`(뉴스 요약 LLM, `data/cards/`에 캐시), `create_embeddings.py`(요약 → 임베딩 빌드). 스냅샷과 모드는 환경변수 `SNAPSHOT_DATE`, `ANONYMIZE=1`
+   - 카드는 영어. 요약 문장에 원문에 없는 숫자가 있으면 그 문장을 버린다(`keep_grounded`)
+   - 익명화: 요약 LLM이 이름·제품명을 지우고, `mask_names`가 회사명·티커를 규칙으로 한 번 더 지운다. 제품명은 LLM에만 의존
+   - 남은 일: 재무 스냅샷이 아직 하나도 없어 사업 요약·밸류에이션 칸은 실데이터로 확인 못 함. 전체 100종목 빌드도 안 함(10-22 가격은 5종목 시험분뿐). 요약 모델 기본값은 `openai/gpt-6-luna`(임시, `SUMMARY_MODEL`로 변경)
 2. **M3 생성·심사**: 제안자 JSON 양식(thesis, evidence, catalyst, risks, falsifier, horizon), 규칙 기반 숫자 인용 검증기(`verifier.py`, 실패 시 0점), 심사 기준(근거 일치 3, 프로필 적합 3, 리스크·반증 2, 촉매 구체성 2). PoC B단계: 종목 30개·100회 평가로 품질 점검, 통과 기준은 검증기 실패율 5% 미만 & 다양성이 Novelty 이상
 3. **M4 포트폴리오**(`portfolio/build.py`), **M5 평가 하니스**(`evaluation/`), **M6 포워드 테스트**
