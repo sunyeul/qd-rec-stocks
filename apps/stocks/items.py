@@ -63,30 +63,6 @@ def load_rows(t: date) -> list[dict]:
     return _records(df)
 
 
-def select_rows(rows: list[dict], per_sector: int) -> list[dict]:
-    """The `per_sector` largest stocks of each sector (all rows when 0), one
-    share class per company.
-
-    Size is market cap, or 20-day dollar volume when fundamentals are missing,
-    so the pick is a rule and not a hand choice.
-    """
-    if not per_sector:
-        return rows
-
-    def size(r):
-        return r.get("market_cap") or r.get("avg_dollar_volume_20d") or 0
-
-    by_company: dict[str, dict] = {}
-    for r in sorted(rows, key=size, reverse=True):
-        by_company.setdefault(re.sub(r"\s*\(.*?\)", "", r["name"]).strip(), r)  # GOOGL / GOOG
-    picked, count = [], {}
-    for r in sorted(by_company.values(), key=size, reverse=True):
-        if count.get(r["sector"], 0) < per_sector:
-            count[r["sector"]] = count.get(r["sector"], 0) + 1
-            picked.append(r)
-    return sorted(picked, key=lambda r: r["ticker"])
-
-
 def attach_summaries(rows: list[dict], t: date, anonymize: bool) -> list[dict]:
     cache = summaries.load(t, anonymize)
     missing = [r["ticker"] for r in rows if r["ticker"] not in cache]
@@ -95,15 +71,13 @@ def attach_summaries(rows: list[dict], t: date, anonymize: bool) -> list[dict]:
             f"{len(missing)} stocks have no summary for {t} ({missing[:5]}...). "
             "Run `uv run python -m apps.stocks.create_embeddings` first."
         )
-    return [{**r, "item_id": r["ticker"], "anonymized": anonymize, "with_news": config.WITH_NEWS,
-             "news": cache[r["ticker"]]} for r in rows]
+    return [{**r, "item_id": r["ticker"], "anonymized": anonymize, "news": cache[r["ticker"]]} for r in rows]
 
 
 def load_items(profile: str) -> list[dict]:
-    """The universe stocks at the configured snapshot, narrowed by PER_SECTOR
-    (the same pool for every profile)."""
+    """Every universe stock at the configured snapshot (the same pool for every profile)."""
     t = snapshot_date()
-    return attach_summaries(select_rows(load_rows(t), config.PER_SECTOR), t, config.ANONYMIZE)
+    return attach_summaries(load_rows(t), t, config.ANONYMIZE)
 
 
 def item_label(row: dict) -> str:
@@ -222,12 +196,11 @@ def item_text(row: dict) -> str:
             news_lines += ["Facts:"] + [f"- {b}" for b in facts]
         if contested:
             news_lines += ["Where readings differ:"] + [f"- {b}" for b in contested]
-        news_block = (["", "## Recent news (last 30 days, published before the close)", *news_lines]
-                      if row.get("with_news", True) else [])
         return "\n".join([
             header, "",
             f"## Numbers (as of the close on {row['snapshot_date']})", *numbers, "",
-            "## Business", business or "(not available)", *news_block,
+            "## Business", business or "(not available)", "",
+            "## Recent news (last 30 days, published before the close)", *news_lines,
         ])
 
     text = render()
@@ -256,13 +229,13 @@ def embedding_text(row: dict) -> str:
     return item_text(row)
 
 
-def embeddings_file(t: date, anonymize: bool, with_news: bool = True):
-    return config.cards_dir(t, anonymize) / ("embeddings.json" if with_news else "embeddings_nonews.json")
+def embeddings_file(t: date, anonymize: bool):
+    return config.cards_dir(t, anonymize) / "embeddings.json"
 
 
 def load_item_embeddings(profile: str) -> dict[str, list[float]]:
     """{item_id: embedding} for the configured snapshot and mode (the same for every profile)."""
-    path = embeddings_file(snapshot_date(), config.ANONYMIZE, config.WITH_NEWS)
+    path = embeddings_file(snapshot_date(), config.ANONYMIZE)
     if not path.exists():
         return {}  # shared.embeddings.require_item_embeddings explains what to run
     return json.loads(path.read_text(encoding="utf-8"))

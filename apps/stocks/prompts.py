@@ -1,6 +1,6 @@
 """
 Prompt templates for the stock idea recommender: zero-shot and few-shot thesis
-generation, the judge's rubric score, the novelty check and the blind pairwise duel.
+generation and the skeptic's critique. The judge's questions are in evaluation.py.
 """
 
 _THESIS_RULES = """Write an investment thesis for buying this stock now, for this investor.
@@ -110,99 +110,4 @@ Respond in this EXACT JSON format:
 
 {{
   "critique": "3-5 short bullet points in one string, each starting with '- '"
-}}"""
-
-
-# Judge (rubric, 0-10 in all). Runs only on theses that passed the number check.
-JUDGE_SYSTEM_PROMPT = """You are a skeptical investment committee member scoring stock theses."""
-
-JUDGE_USER_PROMPT = """Score the following investment thesis.
-
-## Investor:
-{investor_profile}
-
-## Stock card:
-{stock_card}
-
-## Thesis:
-{hypothesis}
-
----
-
-Score each criterion separately, using only the card as the factual record:
-- "evidence_match" (0-3): the evidence is on the card and actually supports the conclusion; no cherry-picking of contradicting lines.
-- "profile_fit" (0-3): the idea fits the investor's horizon, objective, risk limit, constraints and holdings.
-- "risk_falsifier" (0-2): the main risks are named and the falsifier is observable and specific.
-- "catalyst" (0-2): the catalyst is concrete and plausible within the horizon.
-
-A thesis that argues against buying, or whose case is generic enough to fit any stock, must score low on every criterion.
-
-Respond in this EXACT JSON format:
-
-{{
-  "reasoning": "Few sentences summarizing your assessment",
-  "evidence_match": <integer 0-3>,
-  "profile_fit": <integer 0-3>,
-  "risk_falsifier": <integer 0-2>,
-  "catalyst": <integer 0-2>
-}}"""
-
-
-# Novelty check, and the blind pairwise duel run only when the new thesis is not novel
-NOVELTY_CHECK_SYSTEM_PROMPT = """You are a portfolio manager who checks whether a new stock idea adds a genuinely different theme to a watchlist."""
-
-NOVELTY_CHECK_USER_PROMPT = """## Investor:
-{investor_profile}
-
----
-
-## Existing Theses:
-
-{existing_text}
-
----
-
-## New Thesis to Assess:
-
-{new_text}
-
----
-
-Assess whether the NEW thesis is a meaningfully different investment idea from the existing ones:
-- Compare the return driver (e.g. valuation re-rating, earnings momentum, turnaround, secular growth, defensive income, event or spin-off), the main risk exposure, and the stock or industry.
-- Evaluate strictly: the same stock with the same driver is NOT novel, and a different stock riding the same theme with the same risks is NOT novel. Only a distinct driver or exposure counts.
-
-Respond in the following JSON format:
-
-{{
-  "novelty_reasoning": "1-2 sentences explaining whether the new thesis is a genuinely different idea.",
-  "is_novel": true or false
-}}"""
-
-PAIRWISE_DUEL_SYSTEM_PROMPT = """You are a skeptical investment committee member who compares two stock theses and decides which is stronger."""
-
-PAIRWISE_DUEL_USER_PROMPT = """## Investor:
-{investor_profile}
-
----
-
-## Theses to Compare:
-
-{duel_text}
-
----
-
-Which thesis is the better idea for this investor? Judge on the case alone, by:
-- How well the card's evidence supports it
-- Fit with the investor's horizon, objective and constraints
-- Concreteness of the catalyst and the falsifier
-- How well the risks are handled
-
-You must pick exactly one winner; ties are not allowed.
-
-Respond in the following JSON format:
-
-{{
-  "comparison_reasoning": "2-3 sentences explaining the key differentiators and your decision.",
-  "winner": "A" or "B"
 }}"""

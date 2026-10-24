@@ -4,9 +4,8 @@ Configuration for the stock idea recommender.
 The snapshot date t and the card mode are chosen with environment variables,
 because the shared QD loop calls items.load_items(profile) with no other input:
 
-    $env:SNAPSHOT_DATE = "2026-10-22"   # default: the latest universe snapshot
+    $env:SNAPSHOT_DATE = "2026-04-30"   # default: the latest universe snapshot
     $env:ANONYMIZE = "1"                # C-### IDs, market-cap buckets, masked names
-    $env:PER_SECTOR = "3"               # only the 3 largest stocks per sector (PoC stage B)
 
 Archive filenames carry the snapshot date and mode in the profile tag, so a
 run never picks up a seed archive built from other cards.
@@ -22,10 +21,6 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 SNAPSHOT_DATE = os.getenv("SNAPSHOT_DATE") or None
 ANONYMIZE = os.getenv("ANONYMIZE", "0") == "1"
-# "0" leaves the news section off the cards (the numbers-only variant).
-WITH_NEWS = os.getenv("WITH_NEWS", "1") == "1"
-# 0 = every universe stock; N = the N largest by market cap in each sector.
-PER_SECTOR = int(os.getenv("PER_SECTOR", "0"))
 # Seeds the ticker -> C-### shuffle; keep it fixed for the whole experiment.
 ANON_SEED = int(os.getenv("ANON_SEED", "127"))
 
@@ -37,10 +32,10 @@ def cards_dir(t, anonymize: bool) -> Path:
     return CARDS_DIR / f"snapshot_date={t}" / ("anon" if anonymize else "named")
 
 
-# Every default model's knowledge cutoff precedes the backtest snapshots
-# (gemini-2.5-flash-lite 2025-01-31, gemini-3.5-flash-lite 2026-03 per Google's
-# model card, the latest; for the Jev judge see JUDGE_MODEL), so no model can know
-# what happened after t. Change them only together with scripts/backtest.py DATES.
+# Every model's knowledge cutoff precedes the backtest snapshots (gemini-2.5-flash-lite
+# 2025-01-31, gemini-3.5-flash-lite 2026-03 per Google's model card; for the Jev judge
+# see JUDGE_MODEL), so no model can know what happened after t. Change them only
+# together with scripts/backtest.py DATES.
 
 # News summary LLM: one call per stock and snapshot, cached in cards_dir.
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "google/gemini-2.5-flash-lite")
@@ -59,22 +54,18 @@ EMBEDDING_CONCURRENCY = 50
 # QD_ARCHIVES_ROOT redirects both seed lookup and run output.
 ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives") / "stocks")
 
-# OpenRouter model IDs. The proposer and the judge come from different model
-# families so the judge does not share the proposer's blind spots.
+# OpenRouter model IDs; the proposer and the judge come from different model families.
 PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-3.5-flash-lite")
+PROPOSER_REASONING_EFFORT = os.getenv("PROPOSER_REASONING_EFFORT", "low") or None
+# The skeptic's critique is short and formulaic, so a cheaper model writes it.
+CRITIQUE_MODEL = os.getenv("CRITIQUE_MODEL", "google/gemini-2.5-flash-lite")
 # Jev (TypeSafe, via OpenRouter's Decisions API) answers the judge's questions with
 # probabilities: the score is 10 x P(beats the S&P 500 in 3 months). Its cutoff is not
 # published; asked about 60 real Mar-Sep 2026 moves it could not tell true from false
-# (AUC 0.50, vs 0.57 on 2024 moves). Any OpenRouter chat model ID switches to the LLM judge.
+# (AUC 0.50, vs 0.57 on 2024 moves).
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "typesafe/jev-1.14")
-# Set to an empty string to disable reasoning effort. "low" scored like "medium" at lower cost.
+# Recorded in archive configs by the shared loop; Jev itself takes no reasoning effort.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low") or None
-# "medium" with gemini-3.5-flash-lite plus a 3.5 critique cost about $0.008 per evaluation
-# (2026-10-24, 300 evaluations), four times the estimate; "low" is the default.
-PROPOSER_REASONING_EFFORT = os.getenv("PROPOSER_REASONING_EFFORT", "low") or None
-# The skeptic's critique is short and formulaic, so a cheaper model writes it
-# (knowledge cutoff 2025-01-31, before every snapshot).
-CRITIQUE_MODEL = os.getenv("CRITIQUE_MODEL", "google/gemini-2.5-flash-lite")
 PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)
 JUDGE_SUFFIX = "_judge-" + model_tag(JUDGE_MODEL)
 

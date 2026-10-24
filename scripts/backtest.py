@@ -1,13 +1,12 @@
-"""Run the whole backtest: backfill snapshots, build cards, seed, run each method, report.
+"""Run the backtest: backfill snapshots, build cards, seed, run each variant, report.
 
-    uv run python -m scripts.backtest                          # default dates and methods
-    uv run python -m scripts.backtest --step 1                 # one more date, then report and stop
-    uv run python -m scripts.backtest --iterations 30 --dates 2025-03-31 --variants qd_rec_news   # a quick trial
+    uv run python -m scripts.backtest                  # every date
+    uv run python -m scripts.backtest --step 1         # one more unfinished date, then report and stop
+    uv run python -m scripts.backtest --dates 2026-04-30 --iterations 10   # a quick trial
 
-Every snapshot date is after the knowledge cutoff of the default proposer,
-judge and summary models (config.py), so the models cannot know what followed.
-Finished steps are skipped on a rerun. Data and archives go to their own folders
-so the forward-test store is never touched.
+Every snapshot date is after the knowledge cutoff of the proposer, critique and
+summary models (apps/stocks/config.py), so the models cannot know what followed.
+Finished runs are skipped on a rerun.
 """
 
 import argparse
@@ -23,19 +22,17 @@ from shared.paths import find_latest_archive
 
 ROOT = Path(__file__).resolve().parent.parent
 # Month ends after the proposer's knowledge cutoff (gemini-3.5-flash-lite, March 2026),
-# up to the last date with a full month of closes before 2026-10-22. Six dates so the
-# pooled IC has a standard error near 0.05. Scored on 1-month returns (3 months where passed).
+# up to the last date with a full month of closes before 2026-10-22. Scored on 1-month
+# returns (3 months where passed).
 DATES = ["2026-04-30", "2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-22"]
-# name -> (loop method, news on the cards, anonymized cards)
-VARIANTS = {"novelty": ("novelty", True, False), "qd_rec_numbers": ("qd_rec", False, False),
-            "qd_rec_news": ("qd_rec", True, False), "qd_rec_anon": ("qd_rec", True, True)}
-# QD-Rec against the Novelty contrast on every date.
-DEFAULT_VARIANTS = ["qd_rec_news", "novelty"]
+# name -> (loop method, anonymized cards)
+VARIANTS = {"qd_rec": ("qd_rec", False), "novelty": ("novelty", False), "qd_rec_anon": ("qd_rec", True)}
+# QD-Rec against the Novelty contrast (random stocks, no few-shot evolution) on every date.
+DEFAULT_VARIANTS = ["qd_rec", "novelty"]
 # Anonymized QD-Rec on two dates: how much the model's knowledge of company names
 # shifts the picks (the "distraction effect" of Glasserman & Lin).
-CONTRAST = {"2026-05-29": ["qd_rec_anon"], "2026-08-31": ["qd_rec_anon"]}
+EXTRA = {"2026-05-29": ["qd_rec_anon"], "2026-08-31": ["qd_rec_anon"]}
 ENV = {"QD_STOCKS_DATA": "data/backtest500", "QD_ARCHIVES_ROOT": "archives/backtest500",
-       "PER_SECTOR": "0",
        "PYTHONUNBUFFERED": "1"}  # stream each step's progress into the log as it happens
 
 
@@ -51,12 +48,13 @@ def key_status() -> dict:
 
 def remaining_budget() -> float | None:
     """Dollars still spendable: the smaller of the key's limit and the account's credit
-    balance (a key limit above the balance does not help; the 2026-10-24 run hit that)."""
+    balance (a key limit above the balance does not help)."""
     import requests
 
+    status = key_status()  # also loads .env
     data = requests.get("https://openrouter.ai/api/v1/credits", timeout=30,
                         headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}).json()["data"]
-    left = [data["total_credits"] - data["total_usage"], key_status().get("limit_remaining")]
+    left = [data["total_credits"] - data["total_usage"], status.get("limit_remaining")]
     return min(x for x in left if x is not None)
 
 
@@ -87,15 +85,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
     ap.add_argument("--variants", default=",".join(DEFAULT_VARIANTS), help=f"any of {', '.join(VARIANTS)}")
-    # About $0.0022 per evaluation with the Jev judge: 6 dates x 2 runs + 2 anonymized runs
-    # of 300 cost roughly $10, plus about $0.15 per date for S&P 500 news summaries.
+    # About $0.002 per evaluation (measured 2026-10-24) plus $0.15 per date for news summaries.
     ap.add_argument("--iterations", type=int, default=300)
     ap.add_argument("--min-budget", type=float, default=0.5,
-                    help="stop starting new LLM runs when the key has less than this many dollars left")
+                    help="stop starting new LLM runs when less than this many dollars can be spent")
     ap.add_argument("--step", type=int, default=0,
                     help="run LLM work for at most this many unfinished dates, then report on every finished "
                          "date and stop (0 = all)")
-    ap.add_argument("--no-contrast", action="store_true", help="skip the extra runs in CONTRAST")
+    ap.add_argument("--no-extra", action="store_true", help="skip the extra runs in EXTRA")
     ap.add_argument("--manifest", default="archives/backtest500/runs.json")
     args = ap.parse_args()
     os.environ.update(ENV)
@@ -112,20 +109,19 @@ def main() -> int:
     costs = json.loads(costs_file.read_text(encoding="utf-8")) if costs_file.exists() else {}
 
     def tag_of(t, variant):
-        _, news, anon = VARIANTS[variant]
-        return f"{DEFAULT_PROFILE}-{t}-{'anon' if anon else 'named'}-{'news' if news else 'nonews'}-all"
+        return f"{DEFAULT_PROFILE}-{t}-{'anon' if VARIANTS[variant][1] else 'named'}"
 
     for t in dates:
         variants = args.variants.split(",")
-        if args.variants == ",".join(DEFAULT_VARIANTS) and not args.no_contrast:
-            variants += CONTRAST.get(t, [])
+        if args.variants == ",".join(DEFAULT_VARIANTS) and not args.no_extra:
+            variants += EXTRA.get(t, [])
         unfinished = [v for v in variants if not latest(tag_of(t, v), VARIANTS[v][0])]
         if unfinished and args.step and started >= args.step:
             continue  # left for the next --step call
         started += bool(unfinished)
         for variant in variants:
-            method, news, anon = VARIANTS[variant]
-            env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0", "ANONYMIZE": "1" if anon else "0"}
+            method, anon = VARIANTS[variant]
+            env = {"SNAPSHOT_DATE": t, "ANONYMIZE": "1" if anon else "0"}
             tag = tag_of(t, variant)
             if variant not in unfinished:
                 runs.append({"t": t, "method": variant, "archive": latest(tag, method)})
@@ -137,7 +133,7 @@ def main() -> int:
                 break
             spent, started_at = settled_usage(), time.time()
             run("apps.stocks.create_embeddings", **env)
-            # Each card variant gets its own seed archive, shared by the methods that use it.
+            # Each card mode gets its own seed archive, shared by the methods that use it.
             if not latest(tag, "seed"):
                 run("apps.stocks.seed", **env)
             if not latest(tag, method):

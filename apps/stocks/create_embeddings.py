@@ -19,7 +19,7 @@ from . import config, items, summaries
 
 async def main_async(limit: int | None) -> None:
     t = items.snapshot_date()
-    rows = items.select_rows(items.load_rows(t), config.PER_SECTOR)[:limit]
+    rows = items.load_rows(t)[:limit]
     print(f"snapshot {t}, {len(rows)} stocks, {'anonymized' if config.ANONYMIZE else 'named'} cards")
 
     await summaries.build_async(t, rows, config.ANONYMIZE)
@@ -35,7 +35,7 @@ async def main_async(limit: int | None) -> None:
             return await get_embedding_async(text, dimensions=config.EMBEDDING_DIMENSIONS)
 
     vectors = await asyncio.gather(*(embed(s) for s in texts.values()))
-    path = items.embeddings_file(t, config.ANONYMIZE, config.WITH_NEWS)
+    path = items.embeddings_file(t, config.ANONYMIZE)
     store = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     store.update(zip(texts, vectors))
     path.write_text(json.dumps(store), encoding="utf-8")

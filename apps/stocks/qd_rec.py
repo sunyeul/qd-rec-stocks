@@ -4,7 +4,6 @@ Selection and batching are handled by shared.qd_loop; this module evaluates one
 stock–thesis pair against the active archive.
 
     uv run python -m apps.stocks.qd_rec --method qd_rec
-    $env:PER_SECTOR = "3"; uv run python -m apps.stocks.qd_rec --iterations 100
 """
 
 import asyncio

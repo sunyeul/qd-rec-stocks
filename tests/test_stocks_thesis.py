@@ -28,31 +28,6 @@ def test_verifier_rejects_invented_or_changed_numbers():
     assert not result["passed"] and result["unmatched"] == ["18", "31.5", "40"]
 
 
-def _row(ticker, name, sector, cap):
-    return {"ticker": ticker, "name": name, "sector": sector, "market_cap": cap}
-
-
-def test_select_rows_takes_largest_per_sector_and_one_share_class():
-    rows = [_row("GOOGL", "Alphabet Inc. (Class A)", "Comm", 3e12), _row("GOOG", "Alphabet Inc. (Class C)", "Comm", 3e12),
-            _row("META", "Meta Platforms", "Comm", 2e12), _row("T", "AT&T", "Comm", 1e11),
-            _row("XOM", "Exxon Mobil", "Energy", 5e11)]
-    picked = [r["ticker"] for r in items.select_rows(rows, 2)]
-    assert picked == ["GOOGL", "META", "XOM"]
-    assert items.select_rows(rows, 0) is rows
-
-
-def test_profile_tags_never_prefix_each_other(monkeypatch):
-    monkeypatch.setattr(config, "SNAPSHOT_DATE", "2026-10-23")
-    tags = set()
-    for anon in (False, True):
-        for per in (0, 3, 30):
-            monkeypatch.setattr(config, "ANONYMIZE", anon)
-            monkeypatch.setattr(config, "PER_SECTOR", per)
-            tags.add(profiles.profile_tag("base"))
-    assert len(tags) == 6
-    assert not any(a != b and b.startswith(a + "-") for a in tags for b in tags)
-
-
 def test_thesis_fields_and_render():
     fields = proposer.thesis_fields({"thesis": " Buy. ", "evidence": "one fact", "risks": None, "horizon": 6})
     assert fields == {"thesis": "Buy.", "evidence": ["one fact"], "catalyst": "", "risks": [],
@@ -92,3 +67,14 @@ def test_verifier_ignores_holding_periods_but_not_data():
     fields = {"thesis": "Outperform over a 6 to 12 month horizon and the next 2 quarters; a 6-month view.",
               "evidence": ["Revenue grew 18% in 12 months"], "catalyst": "", "risks": []}
     assert verify(fields, CARD, PROFILE)["unmatched"] == ["18"]
+
+
+def test_profile_tags_differ_by_date_and_mode(monkeypatch):
+    tags = set()
+    for t in ("2026-04-30", "2026-05-29"):
+        for anon in (False, True):
+            monkeypatch.setattr(config, "SNAPSHOT_DATE", t)
+            monkeypatch.setattr(config, "ANONYMIZE", anon)
+            tags.add(profiles.profile_tag("neutral"))
+    assert tags == {"neutral-2026-04-30-named", "neutral-2026-04-30-anon",
+                    "neutral-2026-05-29-named", "neutral-2026-05-29-anon"}

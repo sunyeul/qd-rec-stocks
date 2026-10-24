@@ -4,7 +4,6 @@ check, judge and embed a thesis for each.
 
 Usage:
     uv run python -m apps.stocks.seed
-    $env:PER_SECTOR = "3"; uv run python -m apps.stocks.seed --num-seeds 10
 """
 
 import os
