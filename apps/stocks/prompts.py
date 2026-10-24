@@ -15,7 +15,9 @@ Rules:
 - "risks": 1-3 bullets.
 - "falsifier": an observable condition that would prove the thesis wrong (thresholds allowed here).
 - "horizon": the expected holding period, within the investor's horizon.
-- Make the strongest honest case; if the card gives no real case, say so in the thesis."""
+- Make the strongest honest case; if the card gives no real case, say so in the thesis.
+- Open the thesis with this stock's specific return driver, not a stock-agnostic phrase such as
+  "X presents a compelling opportunity to outperform"."""
 
 _THESIS_FIELDS = """  "thesis": "2-4 sentences: why this stock should beat the market over the horizon",
   "evidence": ["card fact 1", "card fact 2"],
@@ -85,6 +87,29 @@ Respond in this EXACT JSON format:
   "source_examples": [thesis numbers you built on, e.g. [2] for mutate or [1, 3] for crossover; [] for explore],
   "evolution_note": "ONE sentence on how the example thesis/theses shaped this one. This is the ONLY field that may reference the examples; leave empty for explore.",
 """ + _THESIS_FIELDS + """
+}}"""
+
+
+# Skeptic: the strongest case against the thesis, written before the judge sees it
+# (bull/bear debate as in TradingAgents). Not number-checked; the judge weighs it.
+CRITIQUE_SYSTEM_PROMPT = """You are a skeptical short seller reviewing a long thesis. You argue against it, honestly."""
+
+CRITIQUE_USER_PROMPT = """## Stock card:
+{stock_card}
+
+## Long thesis:
+{hypothesis}
+
+---
+
+Write the strongest honest case against buying this stock now, using only the card.
+Point to card lines the thesis ignores or misreads, crowded or priced-in arguments, and what could
+go wrong within the horizon. Do not write numbers that are not on the card.
+
+Respond in this EXACT JSON format:
+
+{{
+  "critique": "3-5 short bullet points in one string, each starting with '- '"
 }}"""
 
 

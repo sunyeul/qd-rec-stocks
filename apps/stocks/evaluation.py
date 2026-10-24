@@ -40,22 +40,43 @@ JEV_RUBRIC = {
 }
 
 
-async def judge_score_async(investor_profile: str, stock: dict, hypothesis: str, fields: dict) -> dict:
+OUTPERFORM_QUESTION = {
+    "type": "noul",
+    "instructions": "Weighing the thesis against the skeptic's critique and using only the card, will this stock "
+                    "beat the S&P 500 over the next 3 months?",
+    "criteria": {"true": "It beats the S&P 500 over the next 3 months.",
+                 "false": "It matches or trails the S&P 500 over the next 3 months."},
+}
+
+
+async def judge_score_async(investor_profile: str, stock: dict, hypothesis: str, fields: dict,
+                            critique: str = "") -> dict:
     """Score a thesis 0-10. A thesis citing numbers that are on neither the card
-    nor the profile scores 0 without a judge call."""
+    nor the profile scores 0 without a judge call.
+
+    With Jev, the score is 10 x P(beats the S&P 500 over 3 months), so the quality the
+    loop optimises is the PoC's goal; the rubric parts are kept as diagnostics, and a
+    thesis whose evidence is judged missing (evidence_match < 1) scores 0.
+    """
     card = item_text(stock)
     check = verify(fields, card, investor_profile)
     if not check["passed"]:
         return {"score": 0, "verifier": check,
                 "reasoning": f"Number check failed: {', '.join(check['unmatched'])} not on the card"}
     if JEV:
-        answers = await jev.decide(JUDGE_MODEL, {"investor": investor_profile, "stock_card": card, "thesis": hypothesis},
-                                   {k: {"type": "score", "instructions": q, "criteria": levels}
-                                    for k, (q, levels) in JEV_RUBRIC.items()})
+        questions = {k: {"type": "score", "instructions": q, "criteria": levels} for k, (q, levels) in JEV_RUBRIC.items()}
+        questions["outperform"] = OUTPERFORM_QUESTION
+        answers = await jev.decide(JUDGE_MODEL, {"investor": investor_profile, "stock_card": card, "thesis": hypothesis,
+                                                 "skeptic_critique": critique or "(none)"}, questions)
         result = {k: round(jev.expected_level(answers[k]), 3) for k in JEV_RUBRIC}
-        result["score"] = round(sum(result.values()), 2)  # continuous 0-10
+        result["p_outperform"] = round(answers["outperform"]["noul"], 4)
+        gated = result["evidence_match"] < 1
+        result["score"] = 0.0 if gated else round(10 * result["p_outperform"], 3)
+        result["reasoning"] = "Evidence judged missing" if gated else f"P(beats S&P 500 in 3 months)={result['p_outperform']:.2f}"
         result["verifier"] = check
         return result
+    if critique:
+        hypothesis = f"{hypothesis}\n\nSkeptic's critique:\n{critique}"
 
     response = await acreate(client(),
         model=JUDGE_MODEL,
@@ -80,6 +101,7 @@ MAX_PARSE_ATTEMPTS = 3
 
 def _format_entry_plain(entry: dict, header: str) -> str:
     """Format a thesis entry with a free-form header (no scores)."""
+    critique = f"\n**Skeptic's critique:**\n{entry['critique']}\n" if entry.get("critique") else ""
     return f"""### {header}
 
 **Stock card:**
@@ -87,7 +109,7 @@ def _format_entry_plain(entry: dict, header: str) -> str:
 
 **Thesis:**
 {entry.get("hypothesis", "")}
-"""
+{critique}"""
 
 
 async def check_novelty_async(

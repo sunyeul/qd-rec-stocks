@@ -7,6 +7,7 @@ stock–thesis pair against the active archive.
     $env:PER_SECTOR = "3"; uv run python -m apps.stocks.qd_rec --iterations 100
 """
 
+import asyncio
 from datetime import datetime
 
 from shared.archive_records import new_entry_id, set_replacement_target
@@ -17,7 +18,7 @@ from . import config, items, profiles
 from .config import NUM_NEIGHBORS_NOVELTY
 from .evaluation import check_novelty_async, judge_score_async, pairwise_duel_async
 from .items import archive_text
-from .proposer import generate_hypothesis_async, generate_hypothesis_fewshot_async
+from .proposer import critique_async, generate_hypothesis_async, generate_hypothesis_fewshot_async
 
 
 async def iteration_async(
@@ -40,7 +41,8 @@ async def iteration_async(
             "evolution": evolution,
         }
 
-    embedding = await get_embedding_async(archive_text(stock, hypothesis))
+    embedding, critique = await asyncio.gather(get_embedding_async(archive_text(stock, hypothesis)),
+                                               critique_async(stock, hypothesis))
 
     neighbors = nearest_neighbors(
         embedding,
@@ -56,6 +58,7 @@ async def iteration_async(
         **stock,
         "hypothesis": hypothesis,
         "thesis_fields": fields,
+        "critique": critique,
         "embedding": embedding,
         **lineage,
         "created_at": datetime.now().isoformat(),
@@ -63,7 +66,7 @@ async def iteration_async(
 
     result: dict = {"new_entry": new_entry}
 
-    judgment = await judge_score_async(investor_profile, stock, hypothesis, fields)
+    judgment = await judge_score_async(investor_profile, stock, hypothesis, fields, critique)
     new_entry["judgment"] = judgment
 
     if not judgment["verifier"]["passed"]:

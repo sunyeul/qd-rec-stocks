@@ -1,4 +1,4 @@
-"""Universe: S&P 100 members from Wikipedia, or a CSV you provide.
+"""Universe: S&P 100 (or, for backfills, S&P 500) members from Wikipedia, or a CSV you provide.
 
 The membership is stored with every snapshot, so later evaluation knows
 exactly which tickers were investable on each date (no survivorship bias
@@ -20,36 +20,45 @@ def to_yahoo_symbol(symbol: str) -> str:
     return symbol.strip().upper().replace(".", "-")
 
 
+# index -> (Wikipedia page title, plausible member count range)
+INDEXES = {"sp100": ("S&P 100", (90, 110)), "sp500": ("List of S&P 500 companies", (480, 520))}
+
+
 def fetch_sp100() -> pd.DataFrame:
     resp = requests.get(config.UNIVERSE_URL, headers=_HEADERS, timeout=30)
     resp.raise_for_status()
-    return _parse_sp100(resp.text)
+    return _parse(resp.text, "sp100")
 
 
-def fetch_sp100_asof(when) -> tuple[pd.DataFrame, str]:
-    """Members from the last Wikipedia revision at or before `when` (an aware datetime),
-    so a backfilled snapshot uses the membership of its own date. Returns (members, revision time)."""
+def fetch_index_asof(index: str, when) -> tuple[pd.DataFrame, str]:
+    """Members of `index` from the last Wikipedia revision at or before `when` (an aware
+    datetime), so a backfilled snapshot uses the membership of its own date.
+    Returns (members, revision time)."""
     api = "https://en.wikipedia.org/w/api.php"
-    params = {"action": "query", "prop": "revisions", "titles": "S&P 100", "rvprop": "ids|timestamp",
+    params = {"action": "query", "prop": "revisions", "titles": INDEXES[index][0], "rvprop": "ids|timestamp",
               "rvlimit": 1, "rvstart": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "format": "json"}
     page = next(iter(requests.get(api, params=params, headers=_HEADERS, timeout=30).json()["query"]["pages"].values()))
     rev = page["revisions"][0]
     resp = requests.get("https://en.wikipedia.org/w/index.php", params={"oldid": rev["revid"]},
                         headers=_HEADERS, timeout=30)
     resp.raise_for_status()
-    return _parse_sp100(resp.text), rev["timestamp"]
+    return _parse(resp.text, index), rev["timestamp"]
 
 
-def _parse_sp100(html: str) -> pd.DataFrame:
+def _parse(html: str, index: str) -> pd.DataFrame:
+    """The member table: S&P 100 has Symbol/Name/Sector, S&P 500 Symbol/Security/GICS Sector."""
     tables = pd.read_html(StringIO(html), match="Symbol")
-    table = next(t for t in tables if {"Symbol", "Name"} <= set(t.columns))
+    table = next(t for t in tables if "Symbol" in t.columns and ({"Name", "Security"} & set(t.columns)))
+    name = "Name" if "Name" in table else "Security"
+    sector = next((c for c in ("Sector", "GICS Sector") if c in table), None)
     out = pd.DataFrame({
         "ticker": table["Symbol"].map(to_yahoo_symbol),
-        "name": table["Name"].astype(str),
-        "sector": table["Sector"].astype(str) if "Sector" in table else "",
+        "name": table[name].astype(str),
+        "sector": table[sector].astype(str) if sector else "",
     })
-    if not 90 <= len(out) <= 110:
-        raise ValueError(f"S&P 100 table has {len(out)} rows; the page layout may have changed")
+    lo, hi = INDEXES[index][1]
+    if not lo <= len(out) <= hi:
+        raise ValueError(f"{index} table has {len(out)} rows; the page layout may have changed")
     return out.drop_duplicates("ticker").reset_index(drop=True)
 
 

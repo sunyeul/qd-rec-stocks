@@ -39,9 +39,8 @@ def cards_dir(t, anonymize: bool) -> Path:
 
 # Every default model's knowledge cutoff precedes the backtest snapshots
 # (gemini-2.5-flash-lite 2025-01-31, gemini-3.5-flash-lite 2026-03 per Google's
-# model card, gpt-6-luna 2026-05-18, the latest), so no
-# model can know what happened after t. Change them only together with
-# scripts/backtest.py DATES.
+# model card, the latest; for the Jev judge see JUDGE_MODEL), so no model can know
+# what happened after t. Change them only together with scripts/backtest.py DATES.
 
 # News summary LLM: one call per stock and snapshot, cached in cards_dir.
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "google/gemini-2.5-flash-lite")
@@ -63,11 +62,15 @@ ARCHIVES_DIR = str(_PROJECT_ROOT / (os.getenv("QD_ARCHIVES_ROOT") or "archives")
 # OpenRouter model IDs. The proposer and the judge come from different model
 # families so the judge does not share the proposer's blind spots.
 PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-3.5-flash-lite")
-# The judge decides how well scores discriminate, so it gets the strongest model the
-# budget allows (gpt-5-nano scored half of a 19-thesis sample 10/10).
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "openai/gpt-6-luna")
+# Jev (TypeSafe, via OpenRouter's Decisions API) answers the judge's questions with
+# probabilities: the score is 10 x P(beats the S&P 500 in 3 months). Its cutoff is not
+# published; asked about 60 real Mar-Sep 2026 moves it could not tell true from false
+# (AUC 0.50, vs 0.57 on 2024 moves). Any OpenRouter chat model ID switches to the LLM judge.
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "typesafe/jev-1.14")
 # Set to an empty string to disable reasoning effort. "low" scored like "medium" at lower cost.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low") or None
+# The proposer writes the ideas, so it thinks harder than the judge ("high" in the paper's apps).
+PROPOSER_REASONING_EFFORT = os.getenv("PROPOSER_REASONING_EFFORT", "medium") or None
 PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)
 JUDGE_SUFFIX = "_judge-" + model_tag(JUDGE_MODEL)
 

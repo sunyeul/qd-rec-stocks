@@ -145,7 +145,9 @@ def _raw_closes(tickers: list[str], start: date, end: date) -> pd.DataFrame:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", required=True, help="comma-separated snapshot dates YYYY-MM-DD")
-    ap.add_argument("--universe-file", help="CSV with a 'ticker' column instead of today's S&P 100")
+    ap.add_argument("--universe-file", help="CSV with a 'ticker' column, used for every date")
+    ap.add_argument("--index", choices=sorted(universe.INDEXES), default="sp500",
+                    help="index whose point-in-time members form each date's universe (default: %(default)s)")
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args(argv)
     dates = sorted(clock.parse_date(s) for s in args.dates.split(","))
@@ -157,8 +159,8 @@ def main(argv=None) -> int:
         if args.universe_file:
             members_at[t] = universe.collect(args.universe_file)
         else:
-            members_at[t], rev = universe.fetch_sp100_asof(clock.cutoff(t))
-            members_at[t]["source"] = f"{config.UNIVERSE_URL} (revision {rev})"
+            members_at[t], rev = universe.fetch_index_asof(args.index, clock.cutoff(t))
+            members_at[t]["source"] = f"Wikipedia {universe.INDEXES[args.index][0]} (revision {rev})"
     all_tickers = sorted({tk for m in members_at.values() for tk in m["ticker"]})
     cache = _raw_cache(all_tickers)
     closes = _raw_closes(all_tickers + [config.BENCHMARK_TICKER], dates[0] - timedelta(days=400), dates[-1])

@@ -85,8 +85,10 @@ def parent_influence(entries: list[dict]) -> float:
     return float(np.mean(gaps)) if gaps else float("nan")
 
 
-def active_quality_curve(entries: list[dict], batch: int = 10) -> list[float]:
-    """Mean judge score of the active archive after each batch, rebuilt from timestamps."""
+def active_quality_curve(entries: list[dict], batch: int = 10, top: int | None = None) -> list[float]:
+    """Mean judge score of the active archive (or of its `top` best ideas) after each
+    batch, rebuilt from timestamps. The whole-archive mean can fall while QD-Rec works,
+    because novel ideas are kept even when their score is low; the top-k mean cannot."""
     evaluated = sorted((e for e in entries if e.get("method") != "seed"), key=lambda e: e["created_at"])
     ends = [evaluated[min(i + batch, len(evaluated)) - 1]["created_at"] for i in range(0, len(evaluated), batch)]
     curve = []
@@ -94,8 +96,15 @@ def active_quality_curve(entries: list[dict], batch: int = 10) -> list[float]:
         alive = [e for e in entries
                  if e["created_at"] <= end and e.get("admit_path") not in ("duel_loss", "verifier_fail")
                  and not e.get("discarded_at") and (not e.get("replaced_at") or e["replaced_at"] > end)]
-        curve.append(float(np.mean([e["judgment"]["score"] for e in alive])))
+        scores = sorted((e["judgment"]["score"] for e in alive), reverse=True)
+        curve.append(float(np.mean(scores[:top] if top else scores)))
     return curve
+
+
+def proposal_trend(entries: list[dict]) -> float:
+    """Mean score of the second half of new theses minus the first half (learning signal)."""
+    s = [e["judgment"]["score"] for e in sorted(entries, key=lambda e: e["created_at"]) if e.get("method") != "seed"]
+    return float(np.mean(s[len(s) // 2:]) - np.mean(s[:len(s) // 2])) if len(s) >= 2 else float("nan")
 
 
 def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date, driver_of: dict | None = None) -> dict:
@@ -103,10 +112,11 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date, driver_o
     emb = np.array([e["embedding"] for e in active], dtype=float)
     emb /= np.linalg.norm(emb, axis=1, keepdims=True)
     evaluated = [e for e in entries if e.get("method") != "seed"]
-    curve = active_quality_curve(entries)
+    top = active_quality_curve(entries, top=N_DEFAULT)
     extra = {"ideas_per_stock": len(active) / max(1, len({e["item_id"] for e in active})),
              "parent_influence": parent_influence(entries),
-             "archive_quality_gain": curve[-1] - curve[0] if curve else float("nan")}
+             "top20_quality_gain": top[-1] - top[0] if top else float("nan"),
+             "proposal_trend": proposal_trend(entries)}
     if driver_of:
         extra["driver_entropy"] = drivers.entropy(driver_of[e["entry_id"]] for e in active)
     scores = pd.Series({tk: e["judgment"]["score"] for tk, e in stock_scores(entries).items()})
@@ -172,6 +182,8 @@ def qd_traits(entries: list[dict], driver_of: dict | None = None) -> list[str]:
         f"- Mean judge score of new theses per batch of 10: {curve}",
         "- Mean judge score of the active archive after each batch: "
         + " → ".join(f"{q:.1f}" for q in active_quality_curve(entries)),
+        f"- Mean of the archive's top {N_DEFAULT} after each batch: "
+        + " → ".join(f"{q:.2f}" for q in active_quality_curve(entries, top=N_DEFAULT)),
         f"- Parent influence (similarity to the named parent minus to the other examples): "
         f"{parent_influence(entries):+.3f}",
         f"- Stocks evaluated: {len(visits)} distinct; most visited: "
@@ -242,7 +254,7 @@ def main(argv=None) -> int:
                 fwd = _forward(closes, t, name)
                 out[f"excess_{name}"] = float("nan") if fwd is None else float(fwd[etf] - fwd[BENCHMARK_TICKER])
             rows.append(out)
-    picks_md, picks, traits_md = [], [], []
+    picks_md, picks, traits_md, ranked = [], [], [], []
     for run in runs:
         t = date.fromisoformat(run["t"])
         entries = load_archive(run["archive"])["entries"]
@@ -252,6 +264,13 @@ def main(argv=None) -> int:
         rows.append({"t": t, "method": run["method"], **portfolio_metrics(port, closes, t),
                      **archive_metrics(entries, closes, t, driver_of), **costs.get(run["archive"], {}),
                      "portfolio": " ".join(port)})
+        scores = pd.Series({tk: e["judgment"]["score"] for tk, e in stock_scores(entries).items()})
+        for name in HORIZONS:
+            fwd = _forward(closes, t, name)
+            if fwd is not None:
+                ex = fwd.reindex(scores.index) - fwd[BENCHMARK_TICKER]
+                ranked.append(pd.DataFrame({"method": run["method"], "horizon": name,
+                                            "s": scores.rank(pct=True), "r": ex.rank(pct=True)}).dropna())
         stock_rows = pick_rows(entries, built, closes, t)
         picks += [{"t": t, "method": run["method"], **r} for r in stock_rows]
         picks_md += ["", f"### {t} · {run['method']}", "", _markdown(pd.DataFrame(stock_rows))]
@@ -262,6 +281,13 @@ def main(argv=None) -> int:
     summary = num.groupby("method").mean(numeric_only=True)
     summary[f"hit_rate_{PRIMARY}"] = df.groupby("method")[f"excess_{PRIMARY}"].apply(lambda s: float((s > 0).mean()))
     summary["periods"] = df.groupby("method").size()
+    # Pooled IC: within-date percentile ranks of score and of excess return, stacked over
+    # dates, so the standard error shrinks with the total number of stocks scored.
+    pooled = []
+    for (method, horizon), g in (pd.concat(ranked).groupby(["method", "horizon"]) if ranked else []):
+        pooled.append({"method": method, "horizon": horizon, "n": len(g), "pooled_ic": round(g.s.corr(g.r), 4),
+                       "se": round(1 / np.sqrt(max(len(g) - 1, 1)), 4)})
+    pooled = pd.DataFrame(pooled)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -270,6 +296,8 @@ def main(argv=None) -> int:
     md = ["# Backtest", "", f"Snapshots: {', '.join(map(str, dates))}. Excess = portfolio minus {BENCHMARK_TICKER}, "
           f"net of {ROUND_TRIP_COST:.1%} round trip. N={N_DEFAULT}, at most {K_DEFAULT} per sector.", "",
           "## Mean over snapshots", "", _markdown(summary.round(4).reset_index()), "",
+          "## Pooled IC (score rank vs excess-return rank, all dates)", "",
+          _markdown(pooled) if len(pooled) else "(none)", "",
           "## Per snapshot", "", _markdown(df.round(4)), "",
           "## Picks: why each stock was chosen and what it did next", *picks_md, "",
           "## How QD-Rec got there", *traits_md]

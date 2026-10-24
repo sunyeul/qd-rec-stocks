@@ -22,19 +22,20 @@ from shared.archive_format import load_archive
 from shared.paths import find_latest_archive
 
 ROOT = Path(__file__).resolve().parent.parent
-# Month ends after the judge's knowledge cutoff (gpt-6-luna, 2026-05-18), up to the last
-# date with a full month of closes before 2026-10-22. Scored on 1-month returns.
-# PoC: three dates are enough to see whether the idea works at all.
-DATES = ["2026-05-29", "2026-07-31", "2026-09-22"]
-# name -> (loop method, news on the cards). The PoC shows what QD-Rec recommends and
-# how it turned out, so only qd_rec_news runs by default; the others stay as options.
-VARIANTS = {"novelty": ("novelty", True), "qd_rec_numbers": ("qd_rec", False), "qd_rec_news": ("qd_rec", True)}
-DEFAULT_VARIANTS = ["qd_rec_news"]
-# One contrast run: Novelty (random stocks, no few-shot evolution) on the first date only,
-# to show what QD-Rec's selection and evolution add.
-CONTRAST = {"2026-05-29": ["novelty"]}
-ENV = {"QD_STOCKS_DATA": "data/backtest", "QD_ARCHIVES_ROOT": "archives/backtest",
-       "ANONYMIZE": "0", "PER_SECTOR": "0",
+# Month ends after the proposer's knowledge cutoff (gemini-3.5-flash-lite, March 2026),
+# up to the last date with a full month of closes before 2026-10-22. Six dates so the
+# pooled IC has a standard error near 0.05. Scored on 1-month returns (3 months where passed).
+DATES = ["2026-04-30", "2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-22"]
+# name -> (loop method, news on the cards, anonymized cards)
+VARIANTS = {"novelty": ("novelty", True, False), "qd_rec_numbers": ("qd_rec", False, False),
+            "qd_rec_news": ("qd_rec", True, False), "qd_rec_anon": ("qd_rec", True, True)}
+# QD-Rec against the Novelty contrast on every date.
+DEFAULT_VARIANTS = ["qd_rec_news", "novelty"]
+# Anonymized QD-Rec on two dates: how much the model's knowledge of company names
+# shifts the picks (the "distraction effect" of Glasserman & Lin).
+CONTRAST = {"2026-05-29": ["qd_rec_anon"], "2026-08-31": ["qd_rec_anon"]}
+ENV = {"QD_STOCKS_DATA": "data/backtest500", "QD_ARCHIVES_ROOT": "archives/backtest500",
+       "PER_SECTOR": "0",
        "PYTHONUNBUFFERED": "1"}  # stream each step's progress into the log as it happens
 
 
@@ -79,15 +80,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dates", default=",".join(DATES))
     ap.add_argument("--variants", default=",".join(DEFAULT_VARIANTS), help=f"any of {', '.join(VARIANTS)}")
-    # About $0.003 per evaluation measured, so 3 dates (+1 contrast run) cost roughly $1.5-2.
-    ap.add_argument("--iterations", type=int, default=120)
+    # About $0.0022 per evaluation with the Jev judge: 6 dates x 2 runs + 2 anonymized runs
+    # of 300 cost roughly $10, plus about $0.15 per date for S&P 500 news summaries.
+    ap.add_argument("--iterations", type=int, default=300)
     ap.add_argument("--min-budget", type=float, default=0.5,
                     help="stop starting new LLM runs when the key has less than this many dollars left")
     ap.add_argument("--step", type=int, default=0,
                     help="run LLM work for at most this many unfinished dates, then report on every finished "
                          "date and stop (0 = all)")
-    ap.add_argument("--no-contrast", action="store_true", help="skip the Novelty contrast runs (CONTRAST)")
-    ap.add_argument("--manifest", default="archives/backtest/runs.json")
+    ap.add_argument("--no-contrast", action="store_true", help="skip the extra runs in CONTRAST")
+    ap.add_argument("--manifest", default="archives/backtest500/runs.json")
     args = ap.parse_args()
     os.environ.update(ENV)
     dates = args.dates.split(",")
@@ -103,7 +105,8 @@ def main() -> int:
     costs = json.loads(costs_file.read_text(encoding="utf-8")) if costs_file.exists() else {}
 
     def tag_of(t, variant):
-        return f"{DEFAULT_PROFILE}-{t}-named-{'news' if VARIANTS[variant][1] else 'nonews'}-all"
+        _, news, anon = VARIANTS[variant]
+        return f"{DEFAULT_PROFILE}-{t}-{'anon' if anon else 'named'}-{'news' if news else 'nonews'}-all"
 
     for t in dates:
         variants = args.variants.split(",")
@@ -114,8 +117,8 @@ def main() -> int:
             continue  # left for the next --step call
         started += bool(unfinished)
         for variant in variants:
-            method, news = VARIANTS[variant]
-            env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0"}
+            method, news, anon = VARIANTS[variant]
+            env = {"SNAPSHOT_DATE": t, "WITH_NEWS": "1" if news else "0", "ANONYMIZE": "1" if anon else "0"}
             tag = tag_of(t, variant)
             if variant not in unfinished:
                 runs.append({"t": t, "method": variant, "archive": latest(tag, method)})
@@ -144,7 +147,7 @@ def main() -> int:
         if out_of_budget:
             break
 
-    run("evaluation.report", "--manifest", args.manifest)
+    run("evaluation.report", "--manifest", args.manifest, "--out", "reports/backtest500")
     return 0
 
 

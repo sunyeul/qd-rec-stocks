@@ -64,7 +64,10 @@ def test_failed_number_check_is_discarded_before_novelty(monkeypatch):
     async def propose(profile, stock, context):
         return "text", {"thesis": "Up 99%."}, {"operation": "explore"}
 
-    async def judge(profile, stock, hypothesis, fields):
+    async def critique(stock, hypothesis):
+        return "- weak"
+
+    async def judge(profile, stock, hypothesis, fields, critique=""):
         return {"score": 0, "reasoning": "Number check failed: 99 not on the card", "verifier": {"passed": False}}
 
     async def embed(text):
@@ -75,6 +78,7 @@ def test_failed_number_check_is_discarded_before_novelty(monkeypatch):
 
     monkeypatch.setattr(qd_rec, "generate_hypothesis_fewshot_async", propose)
     monkeypatch.setattr(qd_rec, "judge_score_async", judge)
+    monkeypatch.setattr(qd_rec, "critique_async", critique)
     monkeypatch.setattr(qd_rec, "get_embedding_async", embed)
     monkeypatch.setattr(qd_rec, "archive_text", lambda stock, h: h)
     monkeypatch.setattr(qd_rec, "check_novelty_async", never)

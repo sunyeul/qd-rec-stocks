@@ -17,3 +17,5 @@ archives/
 apps/stocks/profiles_private.py
 data/cards/
 data/backtest/
+data/backtest500/
+archives/backtest500/

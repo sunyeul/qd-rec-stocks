@@ -8,6 +8,9 @@ import asyncio
 import os
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()  # OPENROUTER_API_KEY, as shared.llm does
 
 URL = "https://openrouter.ai/api/alpha/decisions"
 _RETRY_WAITS = (2, 5, 10)

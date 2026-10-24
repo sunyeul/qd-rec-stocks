@@ -8,9 +8,11 @@ text as entry["hypothesis"], the string the shared code expects.
 from shared.lineage import fewshot_schema, parse_evolution
 from shared.llm import acreate, agenerate_payload, client, json_schema_format, loads_lenient
 
-from .config import PROPOSER_MODEL, REASONING_EFFORT
+from .config import PROPOSER_MODEL, PROPOSER_REASONING_EFFORT as REASONING_EFFORT
 from .items import item_text
 from .prompts import (
+    CRITIQUE_SYSTEM_PROMPT,
+    CRITIQUE_USER_PROMPT,
     HYPOTHESIS_FEWSHOT_SYSTEM_PROMPT,
     HYPOTHESIS_FEWSHOT_USER_PROMPT,
     HYPOTHESIS_SYSTEM_PROMPT,
@@ -75,6 +77,25 @@ async def generate_hypothesis_async(investor_profile: str, stock: dict) -> tuple
     result, _thesis = await agenerate_payload(lambda: _generate_once(investor_profile, stock), "thesis")
     fields = thesis_fields(result)
     return render_hypothesis(fields), fields
+
+
+async def critique_async(stock: dict, hypothesis: str) -> str:
+    """The skeptic's case against the thesis, written by the proposer model."""
+    result, critique = await agenerate_payload(lambda: _critique_once(stock, hypothesis), "critique")
+    return critique
+
+
+async def _critique_once(stock: dict, hypothesis: str) -> dict:
+    response = await acreate(client(),
+        model=PROPOSER_MODEL,
+        reasoning_effort=REASONING_EFFORT,
+        messages=[
+            {"role": "system", "content": CRITIQUE_SYSTEM_PROMPT},
+            {"role": "user", "content": CRITIQUE_USER_PROMPT.format(stock_card=item_text(stock), hypothesis=hypothesis)},
+        ],
+        response_format={"type": "json_object"},
+    )
+    return loads_lenient(response.choices[0].message.content)
 
 
 def _format_context(entries: list[dict]) -> str:

@@ -34,7 +34,7 @@ from .config import (
 from .evaluation import judge_score_async
 from .items import archive_text, item_label, load_items
 from .profiles import DEFAULT_PROFILE, get_profile_text, profile_tag
-from .proposer import generate_hypothesis_async
+from .proposer import critique_async, generate_hypothesis_async
 
 
 MAX_SWAPS = 2  # stocks tried in place of one whose theses keep failing the number check
@@ -70,10 +70,9 @@ async def process_seed(
         for swap in range(MAX_SWAPS + 1):
             print(f"[Seed {index+1}/{total}] Processing: {item_label(stock)}")
             hypothesis, fields = await generate_hypothesis_async(investor_profile, stock)
-            judgment, embedding = await asyncio.gather(
-                judge_score_async(investor_profile, stock, hypothesis, fields),
-                get_embedding_async(archive_text(stock, hypothesis)),
-            )
+            critique, embedding = await asyncio.gather(
+                critique_async(stock, hypothesis), get_embedding_async(archive_text(stock, hypothesis)))
+            judgment = await judge_score_async(investor_profile, stock, hypothesis, fields, critique)
             if judgment["verifier"]["passed"]:
                 break
             if swap == MAX_SWAPS or not spares:
@@ -89,6 +88,7 @@ async def process_seed(
             **stock,
             "hypothesis": hypothesis,
             "thesis_fields": fields,
+            "critique": critique,
             "judgment": judgment,
             "embedding": embedding,
             "created_at": datetime.now().isoformat(),
