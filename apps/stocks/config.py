@@ -69,8 +69,12 @@ PROPOSER_MODEL = os.getenv("PROPOSER_MODEL", "google/gemini-3.5-flash-lite")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "typesafe/jev-1.14")
 # Set to an empty string to disable reasoning effort. "low" scored like "medium" at lower cost.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low") or None
-# The proposer writes the ideas, so it thinks harder than the judge ("high" in the paper's apps).
-PROPOSER_REASONING_EFFORT = os.getenv("PROPOSER_REASONING_EFFORT", "medium") or None
+# "medium" with gemini-3.5-flash-lite plus a 3.5 critique cost about $0.008 per evaluation
+# (2026-10-24, 300 evaluations), four times the estimate; "low" is the default.
+PROPOSER_REASONING_EFFORT = os.getenv("PROPOSER_REASONING_EFFORT", "low") or None
+# The skeptic's critique is short and formulaic, so a cheaper model writes it
+# (knowledge cutoff 2025-01-31, before every snapshot).
+CRITIQUE_MODEL = os.getenv("CRITIQUE_MODEL", "google/gemini-2.5-flash-lite")
 PROPOSER_SUFFIX = "_prop-" + model_tag(PROPOSER_MODEL)
 JUDGE_SUFFIX = "_judge-" + model_tag(JUDGE_MODEL)
 

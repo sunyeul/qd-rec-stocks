@@ -50,7 +50,14 @@ def key_status() -> dict:
 
 
 def remaining_budget() -> float | None:
-    return key_status().get("limit_remaining")
+    """Dollars still spendable: the smaller of the key's limit and the account's credit
+    balance (a key limit above the balance does not help; the 2026-10-24 run hit that)."""
+    import requests
+
+    data = requests.get("https://openrouter.ai/api/v1/credits", timeout=30,
+                        headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}).json()["data"]
+    left = [data["total_credits"] - data["total_usage"], key_status().get("limit_remaining")]
+    return min(x for x in left if x is not None)
 
 
 def settled_usage() -> float:
