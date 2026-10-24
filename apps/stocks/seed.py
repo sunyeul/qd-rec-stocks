@@ -37,11 +37,18 @@ from .profiles import DEFAULT_PROFILE, get_profile_text, profile_tag
 from .proposer import generate_hypothesis_async
 
 
-def sample_stocks(profile: str, num_samples: int) -> list[dict]:
+MAX_SWAPS = 2  # stocks tried in place of one whose theses keep failing the number check
+
+
+def sample_stocks(profile: str, num_samples: int) -> tuple[list[dict], list[dict]]:
+    """(seed stocks, spare stocks in random order)."""
     stocks = load_items(profile)
     if num_samples > len(stocks):
         raise ValueError(f"--num-seeds {num_samples} exceeds the {len(stocks)} stocks in the pool")
-    return random.sample(stocks, num_samples)
+    picked = random.sample(stocks, num_samples)  # same draw as before spares existed
+    spares = [s for s in stocks if s not in picked]
+    random.shuffle(spares)
+    return picked, spares
 
 
 async def process_seed(
@@ -50,22 +57,29 @@ async def process_seed(
     semaphore: asyncio.Semaphore,
     index: int,
     total: int,
+    spares: list[dict] | None = None,
 ) -> dict:
     """One seed entry: thesis, number check, judge score and archive embedding.
 
-    A thesis that fails the number check raises, so evaluate_seeds retries the
-    stock instead of seeding the archive with invented numbers.
+    A thesis that fails the number check is never seeded. Some stocks fail every
+    time (the proposer keeps adding a number it knows but the card lacks, e.g. DUK
+    on 2026-05-29), so after a failure the slot moves to a spare stock, up to
+    MAX_SWAPS times; then it raises and evaluate_seeds retries the slot.
     """
     async with semaphore:
-        print(f"[Seed {index+1}/{total}] Processing: {item_label(stock)}")
-
-        hypothesis, fields = await generate_hypothesis_async(investor_profile, stock)
-        judgment, embedding = await asyncio.gather(
-            judge_score_async(investor_profile, stock, hypothesis, fields),
-            get_embedding_async(archive_text(stock, hypothesis)),
-        )
-        if not judgment["verifier"]["passed"]:
-            raise ValueError(judgment["reasoning"])
+        for swap in range(MAX_SWAPS + 1):
+            print(f"[Seed {index+1}/{total}] Processing: {item_label(stock)}")
+            hypothesis, fields = await generate_hypothesis_async(investor_profile, stock)
+            judgment, embedding = await asyncio.gather(
+                judge_score_async(investor_profile, stock, hypothesis, fields),
+                get_embedding_async(archive_text(stock, hypothesis)),
+            )
+            if judgment["verifier"]["passed"]:
+                break
+            if swap == MAX_SWAPS or not spares:
+                raise ValueError(judgment["reasoning"])
+            print(f"[Seed {index+1}/{total}] {item_label(stock)}: {judgment['reasoning']}; trying a spare stock")
+            stock = spares.pop()
 
         entry = {
             "entry_id": new_entry_id(),
@@ -91,11 +105,11 @@ async def main_async(profile: str = DEFAULT_PROFILE, num_seeds: int = NUM_SEEDS,
     print(f"Parallel workers: {NUM_PARALLEL_WORKERS}\n")
 
     semaphore = asyncio.Semaphore(NUM_PARALLEL_WORKERS)
-    stocks = sample_stocks(profile, num_seeds)
+    stocks, spares = sample_stocks(profile, num_seeds)
     print(f"Sampled {len(stocks)} stocks. Processing in parallel...\n")
 
     archive, num_attempted = await evaluate_seeds(
-        stocks, lambda stock, index: process_seed(stock, investor_profile, semaphore, index, len(stocks)),
+        stocks, lambda stock, index: process_seed(stock, investor_profile, semaphore, index, len(stocks), spares),
         num_parallel_workers=NUM_PARALLEL_WORKERS,
     )
 
