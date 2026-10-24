@@ -1,15 +1,13 @@
 """Rebuild past snapshots for the backtest from data that is dated.
 
-    uv run python -m ingest.backfill --dates 2025-03-31,2025-06-30
+    $env:QD_STOCKS_DATA = "data/backtest500"
+    uv run python -m ingest.backfill --dates 2026-04-30,2026-05-29 --index sp500
 
-Prices are point-in-time by construction (closes dated on or before t). The
-live fundamentals of run_daily cannot be rebuilt, so each past t gets values
+Each t gets the index members Wikipedia listed at t's close. Prices are
+point-in-time by construction (closes dated on or before t). Fundamentals are
 recomputed from annual statements that were filed by t: a fiscal year counts
 only from FILING_LAG_DAYS after its end (the 10-K deadline for large filers).
-News comes from Google News RSS search instead of Yahoo (news_history.py).
-
-Write these into a separate store (QD_STOCKS_DATA, e.g. data/backtest) so the
-forward-test snapshots stay purely collected data.
+News comes from Google News RSS search (news_history.py).
 """
 
 import argparse
@@ -22,8 +20,11 @@ import numpy as np
 import pandas as pd
 
 from . import clock, config, news_history, prices, snapshot, universe
-from .fundamentals import FIELDS
 
+# Columns of a fundamentals partition, the fields stock cards read.
+COLUMNS = ["name", "sector", "industry", "business_summary", "market_cap", "pe_trailing", "pe_forward", "pb",
+           "dividend_yield", "revenue_growth_yoy", "earnings_growth_yoy", "operating_margin", "profit_margin",
+           "roe", "debt_to_equity", "beta"]
 FILING_LAG_DAYS = 60
 # Name and description do not change with t; sector and summary text are taken from today.
 STATIC_INFO = {"shortName": "name", "industry": "industry", "longBusinessSummary": "business_summary",
@@ -71,7 +72,7 @@ def _ratio(a, b):
 
 
 def fundamentals_asof(raw: dict, t: date, close: pd.Series, spy: pd.Series) -> dict:
-    """The run_daily fundamentals columns as they could have been known at t's close.
+    """The fundamentals columns as they could have been known at t's close.
 
     `close` and `spy` are split-adjusted, not dividend-adjusted, daily closes.
 
@@ -82,7 +83,7 @@ def fundamentals_asof(raw: dict, t: date, close: pd.Series, spy: pd.Series) -> d
     st = raw["statements"]
     filed = st[st.index + pd.Timedelta(days=FILING_LAG_DAYS) <= pd.Timestamp(t)]
     close = close[close.index.date <= t].dropna()
-    row = {col: None for col in FIELDS.values()}
+    row = {col: None for col in COLUMNS}
     row.update({k: v for k, v in raw["info"].items() if k != "shares_now"})
     row["sector"] = None  # the universe's GICS sector is used
     if close.empty:

@@ -1,7 +1,7 @@
 """Past headlines for the backtest from Google News RSS search (no registration).
 
-Yahoo only serves recent news and the GDELT API rate-limits this machine, so
-backfilled snapshots take headlines from Google News with a date range. RSS
+Yahoo only serves recent news and the GDELT API rate-limited this machine, so
+past snapshots take headlines from Google News with a date range. RSS
 gives a headline, publisher and publication date, but the time of day is not
 reliable, so only articles dated strictly before t are kept: news from day t
 itself could have come after the close.
@@ -20,7 +20,8 @@ import pandas as pd
 import requests
 
 from . import config
-from .news import COLUMNS
+
+COLUMNS =["id", "ticker", "title", "summary", "publisher", "published_at", "url", "content_type", "source"]
 
 RSS_URL = "https://news.google.com/rss/search"
 _HEADERS = {"User-Agent": "qd-rec-stocks/0.1 (personal research)"}

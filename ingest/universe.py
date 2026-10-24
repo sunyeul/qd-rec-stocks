@@ -1,16 +1,14 @@
-"""Universe: S&P 100 (or, for backfills, S&P 500) members from Wikipedia, or a CSV you provide.
+"""Universe: S&P 500 (or S&P 100) members as Wikipedia listed them on a past date, or a CSV you provide.
 
-The membership is stored with every snapshot, so later evaluation knows
-exactly which tickers were investable on each date (no survivorship bias
-from re-reading today's list).
+The membership is stored with every snapshot, so evaluation knows exactly
+which tickers were investable on each date (no survivorship bias from
+re-reading today's list).
 """
 
 from io import StringIO
 
 import pandas as pd
 import requests
-
-from . import config
 
 _HEADERS = {"User-Agent": "qd-rec-stocks/0.1 (personal research)"}
 
@@ -22,12 +20,6 @@ def to_yahoo_symbol(symbol: str) -> str:
 
 # index -> (Wikipedia page title, plausible member count range)
 INDEXES = {"sp100": ("S&P 100", (90, 110)), "sp500": ("List of S&P 500 companies", (480, 520))}
-
-
-def fetch_sp100() -> pd.DataFrame:
-    resp = requests.get(config.UNIVERSE_URL, headers=_HEADERS, timeout=30)
-    resp.raise_for_status()
-    return _parse(resp.text, "sp100")
 
 
 def fetch_index_asof(index: str, when) -> tuple[pd.DataFrame, str]:
@@ -74,7 +66,7 @@ def load_csv(path: str) -> pd.DataFrame:
     return df[["ticker", "name", "sector"]].drop_duplicates("ticker").reset_index(drop=True)
 
 
-def collect(universe_file: str | None = None) -> pd.DataFrame:
-    df = load_csv(universe_file) if universe_file else fetch_sp100()
-    df["source"] = universe_file or config.UNIVERSE_URL
+def collect(universe_file: str) -> pd.DataFrame:
+    df = load_csv(universe_file)
+    df["source"] = universe_file
     return df

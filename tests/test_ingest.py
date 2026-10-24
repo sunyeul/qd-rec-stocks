@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ingest import clock, config, news, prices, reader, snapshot
+from ingest import clock, config, prices, reader, snapshot
 
 
 @pytest.fixture(autouse=True)
@@ -18,24 +18,6 @@ def tmp_store(tmp_path, monkeypatch):
 
 
 # --- clock -----------------------------------------------------------------
-
-def test_snapshot_date_before_and_after_close():
-    # 2026-10-23 is a Friday. 15:00 New York = 19:00 UTC (EDT).
-    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 19, 0, tzinfo=timezone.utc)) == date(2026, 10, 22)
-    # 17:00 New York, after the close settles
-    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 21, 0, tzinfo=timezone.utc)) == date(2026, 10, 23)
-
-
-def test_snapshot_date_weekend_and_monday_morning():
-    sat = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
-    assert clock.latest_snapshot_date(sat) == date(2026, 10, 23)
-    mon_morning = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)  # 10:00 New York
-    assert clock.latest_snapshot_date(mon_morning) == date(2026, 10, 23)
-
-
-def test_snapshot_date_from_tokyo_morning():
-    # 07:00 JST Saturday = 18:00 New York Friday
-    assert clock.latest_snapshot_date(datetime(2026, 10, 23, 22, 0, tzinfo=timezone.utc)) == date(2026, 10, 23)
 
 
 def test_cutoff_is_new_york_close():
@@ -116,78 +98,6 @@ def test_price_features_short_history_is_nan():
     feats = prices.compute_features(pd.Series(100.0, index=idx), pd.Series(1.0, index=idx), date(2026, 10, 22))
     assert np.isnan(feats["ret_12m"]) and np.isnan(feats["vol_60d"])
     assert feats["ret_1m"] == pytest.approx(0.0) or np.isnan(feats["ret_1m"])
-
-
-# --- news parsing ----------------------------------------------------------
-
-def test_parse_news_current_shape():
-    raw = {"id": "abc", "content": {
-        "title": "Company beats estimates", "summary": "Revenue rose.",
-        "pubDate": "2026-10-22T13:05:00Z", "provider": {"displayName": "Reuters"},
-        "canonicalUrl": {"url": "https://example.com/a"}, "contentType": "STORY"}}
-    item = news.parse_item(raw, "AAA")
-    assert item["id"] == "abc" and item["publisher"] == "Reuters"
-    assert pd.Timestamp(item["published_at"]) == pd.Timestamp("2026-10-22T13:05:00Z")
-
-
-def test_parse_news_legacy_shape():
-    raw = {"uuid": "u1", "title": "Old style", "publisher": "AP",
-           "providerPublishTime": 1792674300, "link": "https://example.com/b", "type": "STORY"}
-    item = news.parse_item(raw, "AAA")
-    assert item["id"] == "u1" and item["published_at"].endswith("+00:00")
-
-
-def test_parse_news_drops_items_without_time():
-    assert news.parse_item({"id": "x", "content": {"title": "no date"}}, "AAA") is None
-
-
-# --- fetch window for "as of now" values -------------------------------------
-
-def test_fetch_window_closes_at_next_open():
-    t = date(2026, 10, 22)  # Thursday
-    assert clock.next_open(t) == datetime(2026, 10, 23, 13, 30, tzinfo=timezone.utc)
-    assert clock.in_fetch_window(t, datetime(2026, 10, 22, 22, 0, tzinfo=timezone.utc))  # 07:00 JST Fri
-    # 11:55 New York on Friday: Friday's session has started, so too late for Thursday.
-    assert not clock.in_fetch_window(t, datetime(2026, 10, 23, 15, 55, tzinfo=timezone.utc))
-    assert not clock.in_fetch_window(t, datetime(2026, 10, 22, 19, 0, tzinfo=timezone.utc))  # before close
-
-
-def test_fetch_window_spans_weekend():
-    fri = date(2026, 10, 23)
-    assert clock.next_open(fri) == datetime(2026, 10, 26, 13, 30, tzinfo=timezone.utc)
-    assert clock.in_fetch_window(fri, datetime(2026, 10, 25, 22, 0, tzinfo=timezone.utc))  # 07:00 JST Mon
-
-
-# --- news fallback -----------------------------------------------------------
-
-def test_search_item_related_filter():
-    assert news.related_to({"relatedTickers": ["AAPL", "MSFT"]}, "AAPL")
-    assert not news.related_to({"relatedTickers": ["MSFT"]}, "AAPL")
-    assert news.related_to({}, "AAPL")
-
-
-def test_fetch_one_falls_back_to_search(monkeypatch):
-    import sys, types
-
-    class FakeTicker:
-        def __init__(self, t): pass
-        def get_news(self, count=10, tab="news"): return []
-
-    class FakeSearch:
-        def __init__(self, q, max_results=8, news_count=8):
-            self.news = [
-                {"uuid": "s1", "title": "about AAA", "publisher": "AP", "providerPublishTime": 1792674300,
-                 "link": "https://example.com/s1", "relatedTickers": ["AAA"]},
-                {"uuid": "s2", "title": "about BBB", "publisher": "AP", "providerPublishTime": 1792674300,
-                 "link": "https://example.com/s2", "relatedTickers": ["BBB"]},
-            ]
-
-    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=FakeTicker, Search=FakeSearch))
-    monkeypatch.setattr(news.time, "sleep", lambda s: None)
-    items, stats = news.fetch_one("AAA")
-    assert [i["id"] for i in items] == ["s1"]
-    assert items[0]["source"] == "search"
-    assert stats == {"ticker": "AAA", "stream_raw": 0, "search_raw": 2, "parsed": 1, "source": "search"}
 
 
 # --- backfill (reconstructed fundamentals) -----------------------------------

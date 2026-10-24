@@ -1,62 +1,33 @@
-# ingest: 시점 t 데이터 수집 (PoC A단계)
+# ingest: 과거 시점 t의 스냅샷 만들기
 
-매일 미국 장 마감 후 S&P 100 종목의 가격 지표, 뉴스, (주 1회) 재무 지표를 저장한다.
-LLM은 쓰지 않으므로 비용이 들지 않는다.
-
-## 준비
+백테스트용으로 과거 날짜 t마다 유니버스, 가격, 재무, 뉴스를 "그날 장 마감까지 알 수 있던 것"만으로 다시 만든다.
 
 ```
-uv add yfinance lxml
-uv add --dev pytest
-uv run python -m pytest tests -q        # 누출 방지 테스트 (네트워크 불필요)
+uv run python -m ingest.backfill --dates 2026-04-30,2026-05-29 --index sp500
 ```
 
-## 실행
+- 저장 위치: `data/backtest500/snapshots/` (`QD_STOCKS_DATA`로 변경)
+- 이미 있는 날짜는 건너뛴다. 다시 만들려면 `--overwrite`.
+- 테스트: `uv run python -m pytest tests -q` (네트워크 불필요)
 
-```
-uv run python -m ingest.run_daily --limit 5     # 5종목으로 시험
-uv run python -m ingest.run_daily               # 전체
-```
+## 무엇을 어떻게 만드나
 
-- 스냅샷 날짜 t = 마감이 확정된 가장 최근 미국 거래일(뉴욕 시간 16:30 이후).
-- 이미 있는 날짜는 건너뛴다. 다시 받으려면 `--overwrite`.
-- 재무 지표는 최근 7일 안에 받은 게 없을 때만 받는다(`--force-fundamentals`로 강제).
-- 다른 종목 목록을 쓰려면 `--universe-file my.csv` (`ticker` 열 필수).
-
-## 저장 구조
-
-```
-data/snapshots/
-├─ universe/snapshot_date=2026-10-23/data.parquet       # 그날의 유니버스 구성
-├─ prices/snapshot_date=.../data.parquet                # 수익률·변동성·거래대금, SPY 포함
-├─ fundamentals/snapshot_date=.../data.parquet          # PER, PBR, 성장률, 사업 요약 등
-└─ news/snapshot_date=.../data.parquet                  # 기사 제목·요약·발행 시각
-```
+| 소스 | 방법 | 시점 규칙 |
+| --- | --- | --- |
+| 유니버스 | Wikipedia S&P 500(또는 S&P 100) 문서의 t 장 마감 직전 판 | 당시 구성 그대로(생존 편향 없음) |
+| 가격 | yfinance 일별 종가 → 1·3·12개월 수익률, 12-1 모멘텀, 60일 변동성, 20일 거래대금 | t 이전 종가만 |
+| 재무 | yfinance 연간 재무제표에서 재계산(PER, PBR, 성장률, 이익률, ROE, 부채비율, 배당률, 베타) | 회계연도 종료 + 60일(10-K 기한)이 지난 것만 |
+| 뉴스 | Google News RSS 검색(기간 지정): 제목, 매체, 날짜 | t 전날까지(RSS 시각을 믿을 수 없어 t 당일은 제외) |
 
 ## 누출 방지 규칙
 
-- 정보 기준 시각(cutoff)은 t일 뉴욕 16:00(장 마감). 그 뒤 발행된 뉴스는 다음 스냅샷 몫이다.
-- 종목 카드를 만드는 코드는 반드시 `ingest.reader`만 쓴다. `load_asof(source, t)`와
-  `load_news_asof(t)`는 t 이후 데이터를 절대 돌려주지 않으며, `tests/test_ingest.py`가 이를 검사한다.
-- t 이후 가격이 필요한 평가 코드는 `evaluation/`에 따로 두고, 수익률은 t 종가부터 잰다.
-
-## 매일 자동 실행 (Windows 작업 스케줄러)
-
-PowerShell에서 한 번만 실행한다. 매일 07:00(JST)은 뉴욕 전날 저녁이라 마감 데이터가 확정된 뒤다.
-
-```
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PWD\scripts\run_ingest.ps1`""
-$trigger = New-ScheduledTaskTrigger -Daily -At 7:00
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
-Register-ScheduledTask -TaskName "qd-rec-stocks ingest" -Action $action -Trigger $trigger -Settings $settings
-```
-
-- 저장소 루트에서 실행해야 `$PWD`가 맞다. 로그는 `data\logs\`에 남는다.
-- PC가 꺼져 있던 날의 뉴스·재무는 나중에 되살릴 수 없다(가격은 `--date`로 다시 받을 수 있음).
-  빠지는 날이 잦으면 항상 켜진 환경으로 옮기는 걸 고려한다.
+- 정보 기준 시각은 t일 뉴욕 16:00(장 마감).
+- 종목 카드를 만드는 코드는 `ingest.reader`(`load_asof`, `load_news_asof`)로만 읽는다. t 이후 데이터는 절대 돌려주지 않으며 `tests/test_ingest.py`가 검사한다.
+- t 이후 가격은 `evaluation/`에서만 읽는다.
 
 ## 알려진 한계
 
-- yfinance는 비공식 API라 응답 형식이나 한도가 예고 없이 바뀔 수 있다. 실패한 종목은 `error` 열에 남는다.
-- 거래소 휴장일은 따로 다루지 않는다. 휴장일 스냅샷의 가격 지표는 직전 거래일과 같고, `last_price_date`로 확인할 수 있다.
-- `dividend_yield`는 yfinance 버전에 따라 단위(비율/퍼센트)가 다를 수 있어 원값 그대로 저장한다.
+- 시가총액은 오늘의 주식 수 × t 종가라, 그 뒤의 자사주 매입·증자만큼 PER·PBR이 몇 % 어긋날 수 있다.
+- 사업 요약은 오늘 받은 설명이다.
+- 뉴스는 오늘의 검색 순위가 고른 과거 기사이고, 본문 없이 제목만 있다.
+- 나중에 인수되거나 티커가 바뀐 종목(예: BK, CTRA)은 Yahoo에 데이터가 없어 빠진다(날짜당 몇 종목).
