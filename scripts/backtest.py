@@ -86,6 +86,7 @@ def main() -> int:
     ap.add_argument("--step", type=int, default=0,
                     help="run LLM work for at most this many unfinished dates, then report on every finished "
                          "date and stop (0 = all)")
+    ap.add_argument("--no-contrast", action="store_true", help="skip the Novelty contrast runs (CONTRAST)")
     ap.add_argument("--manifest", default="archives/backtest/runs.json")
     args = ap.parse_args()
     os.environ.update(ENV)
@@ -106,7 +107,7 @@ def main() -> int:
 
     for t in dates:
         variants = args.variants.split(",")
-        if args.variants == ",".join(DEFAULT_VARIANTS):
+        if args.variants == ",".join(DEFAULT_VARIANTS) and not args.no_contrast:
             variants += CONTRAST.get(t, [])
         unfinished = [v for v in variants if not latest(tag_of(t, v), VARIANTS[v][0])]
         if unfinished and args.step and started >= args.step:
