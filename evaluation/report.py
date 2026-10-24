@@ -3,9 +3,10 @@
     uv run python -m evaluation.report --manifest archives/backtest/runs.json
 
 The manifest (written by scripts/backtest.py) lists {"t", "method", "archive"}; a
-sibling *_costs.json gives each run's spend and minutes. The baseline per t is the
-equal-weight universe (SPY is the zero line). Portfolio returns are net of a
-round-trip cost. The picks and "How QD-Rec got there" sections are written for the blog.
+sibling *_costs.json gives each run's spend and minutes. Baselines per t: the
+RSP and QQQ ETFs and the equal-weight universe (SPY is the zero line). Portfolio
+returns are net of a round-trip cost. The picks and "How QD-Rec got there"
+sections are written for the blog; return drivers are labeled by Jev (cached).
 """
 
 import argparse
@@ -22,7 +23,10 @@ from ingest.config import BENCHMARK_TICKER
 from portfolio.build import K_DEFAULT, N_DEFAULT, build, stock_scores
 from shared.archive_format import load_archive
 
+from . import drivers
 from .returns import HORIZONS, fetch_closes, forward_returns, window
+
+ETFS = ["RSP", "QQQ"]  # equal-weight S&P 500 and Nasdaq 100, as excess over SPY
 
 ROUND_TRIP_COST = 0.002  # 10 bp each way, the whole book turned over each period
 # The horizon every snapshot can be scored on (monthly snapshots up to a month ago);
@@ -61,11 +65,50 @@ def portfolio_metrics(tickers: list[str], closes: pd.DataFrame, t: date) -> dict
     return out
 
 
-def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
+def _cos(a, b) -> float:
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    return float(a @ b / np.linalg.norm(a) / np.linalg.norm(b))
+
+
+def parent_influence(entries: list[dict]) -> float:
+    """Mean of (similarity to the parent a thesis named) - (mean similarity to the other examples
+    it was shown). Near 0: the named parent shaped it no more than the other examples did."""
+    by_id = {e["entry_id"]: e for e in entries}
+    gaps = []
+    for e in entries:
+        named = (e.get("evolution") or {}).get("evo_parent_entry_ids") or []
+        shown = [by_id[i] for i in e.get("parent_entry_ids", []) if i in by_id]
+        others = [s for s in shown if s["entry_id"] not in named]
+        if named and others and all(i in by_id for i in named):
+            gaps.append(np.mean([_cos(e["embedding"], by_id[i]["embedding"]) for i in named])
+                        - np.mean([_cos(e["embedding"], o["embedding"]) for o in others]))
+    return float(np.mean(gaps)) if gaps else float("nan")
+
+
+def active_quality_curve(entries: list[dict], batch: int = 10) -> list[float]:
+    """Mean judge score of the active archive after each batch, rebuilt from timestamps."""
+    evaluated = sorted((e for e in entries if e.get("method") != "seed"), key=lambda e: e["created_at"])
+    ends = [evaluated[min(i + batch, len(evaluated)) - 1]["created_at"] for i in range(0, len(evaluated), batch)]
+    curve = []
+    for end in ends:
+        alive = [e for e in entries
+                 if e["created_at"] <= end and e.get("admit_path") not in ("duel_loss", "verifier_fail")
+                 and not e.get("discarded_at") and (not e.get("replaced_at") or e["replaced_at"] > end)]
+        curve.append(float(np.mean([e["judgment"]["score"] for e in alive])))
+    return curve
+
+
+def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date, driver_of: dict | None = None) -> dict:
     active = [e for e in entries if e["status"] == "active"]
     emb = np.array([e["embedding"] for e in active], dtype=float)
     emb /= np.linalg.norm(emb, axis=1, keepdims=True)
     evaluated = [e for e in entries if e.get("method") != "seed"]
+    curve = active_quality_curve(entries)
+    extra = {"ideas_per_stock": len(active) / max(1, len({e["item_id"] for e in active})),
+             "parent_influence": parent_influence(entries),
+             "archive_quality_gain": curve[-1] - curve[0] if curve else float("nan")}
+    if driver_of:
+        extra["driver_entropy"] = drivers.entropy(driver_of[e["entry_id"]] for e in active)
     scores = pd.Series({tk: e["judgment"]["score"] for tk, e in stock_scores(entries).items()})
     ic = {}
     for name in HORIZONS:
@@ -81,6 +124,7 @@ def archive_metrics(entries: list[dict], closes: pd.DataFrame, t: date) -> dict:
         "verifier_fail_rate": float(np.mean([e.get("admit_path") == "verifier_fail" for e in evaluated]))
         if evaluated else float("nan"),
         **ic,
+        **extra,
     }
 
 
@@ -107,14 +151,16 @@ def pick_rows(entries: list[dict], port: list[dict], closes: pd.DataFrame, t: da
     return rows
 
 
-def qd_traits(entries: list[dict]) -> list[str]:
+def qd_traits(entries: list[dict], driver_of: dict | None = None) -> list[str]:
     """Markdown showing what makes the run QD-Rec: evolution, novelty gating, the
     archive's quality over time, item selection, and the spread of ideas."""
     by_id = {e["entry_id"]: e for e in entries}
     evaluated = sorted((e for e in entries if e.get("method") != "seed"), key=lambda e: e["created_at"])
     active = [e for e in entries if e["status"] == "active"]
     count = lambda xs: ", ".join(f"{k} {v}" for k, v in pd.Series(xs).value_counts().items())
-    say = lambda e: f"{e['item_id']} ({e['judgment']['score']}): {_first_sentence(e.get('thesis_fields', {}).get('thesis'))}"
+    tag = lambda e: f", {driver_of[e['entry_id']]}" if driver_of and e["entry_id"] in driver_of else ""
+    say = lambda e: (f"{e['item_id']} ({e['judgment']['score']}{tag(e)}): "
+                     f"{_first_sentence(e.get('thesis_fields', {}).get('thesis'))}")
     batches = [evaluated[i:i + 10] for i in range(0, len(evaluated), 10)]
     curve = " → ".join(f"{np.mean([e['judgment']['score'] for e in b]):.1f}" for b in batches)
     visits = pd.Series([e["item_id"] for e in evaluated]).value_counts()
@@ -123,10 +169,19 @@ def qd_traits(entries: list[dict]) -> list[str]:
         f"{len({e['item_id'] for e in active})} stocks",
         f"- How each new thesis was made: {count([(e.get('evolution') or {}).get('operation', 'zero-shot') for e in evaluated])}",
         f"- What happened to it: {count([e.get('admit_path') for e in evaluated])}",
-        f"- Mean judge score per batch of 10, in order: {curve}",
+        f"- Mean judge score of new theses per batch of 10: {curve}",
+        "- Mean judge score of the active archive after each batch: "
+        + " → ".join(f"{q:.1f}" for q in active_quality_curve(entries)),
+        f"- Parent influence (similarity to the named parent minus to the other examples): "
+        f"{parent_influence(entries):+.3f}",
         f"- Stocks evaluated: {len(visits)} distinct; most visited: "
         + ", ".join(f"{tk} ×{n}" for tk, n in visits.head(5).items()),
+        f"- Ideas per stock in the archive: {len(active) / max(1, len({e['item_id'] for e in active})):.2f} "
+        f"(max {max(pd.Series([e['item_id'] for e in active]).value_counts())})",
     ]
+    if driver_of:
+        out.append(f"- Return drivers of the active ideas: {count([driver_of[e['entry_id']] for e in active])} "
+                   f"(entropy {drivers.entropy(driver_of[e['entry_id']] for e in active):.2f})")
     child = max((e for e in active if (e.get("evolution") or {}).get("operation") in ("mutate", "crossover")
                  and e["evolution"].get("evo_parent_entry_ids")), key=lambda e: e["judgment"]["score"], default=None)
     if child:
@@ -165,12 +220,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out", default="reports/backtest")
+    ap.add_argument("--no-drivers", action="store_true", help="skip labeling return drivers with Jev")
     args = ap.parse_args(argv)
     runs = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     dates = sorted({date.fromisoformat(r["t"]) for r in runs})
 
     universes = {t: reader.load_asof("universe", t)["ticker"].tolist() for t in dates}
-    all_tickers = sorted({tk for u in universes.values() for tk in u} | {BENCHMARK_TICKER})
+    all_tickers = sorted({tk for u in universes.values() for tk in u} | {BENCHMARK_TICKER, *ETFS})
     closes = fetch_closes(all_tickers, dates[0], date.today())
 
     costs_file = Path(args.manifest.replace(".json", "_costs.json"))
@@ -180,19 +236,26 @@ def main(argv=None) -> int:
     for t in dates:
         tickers = [tk for tk in universes[t] if tk in closes.columns]
         rows.append({"t": t, "method": "equal_weight", **portfolio_metrics(tickers, closes, t)})
+        for etf in ETFS:  # one-stock "portfolios" with no trading cost
+            out = {"t": t, "method": etf, "n": 1}
+            for name in HORIZONS:
+                fwd = _forward(closes, t, name)
+                out[f"excess_{name}"] = float("nan") if fwd is None else float(fwd[etf] - fwd[BENCHMARK_TICKER])
+            rows.append(out)
     picks_md, picks, traits_md = [], [], []
     for run in runs:
         t = date.fromisoformat(run["t"])
         entries = load_archive(run["archive"])["entries"]
+        driver_of = None if args.no_drivers else drivers.labels([e for e in entries if e["status"] == "active"])
         built = [p for p in build(entries) if p["ticker"] in closes.columns]
         port = [p["ticker"] for p in built]
         rows.append({"t": t, "method": run["method"], **portfolio_metrics(port, closes, t),
-                     **archive_metrics(entries, closes, t), **costs.get(run["archive"], {}),
+                     **archive_metrics(entries, closes, t, driver_of), **costs.get(run["archive"], {}),
                      "portfolio": " ".join(port)})
         stock_rows = pick_rows(entries, built, closes, t)
         picks += [{"t": t, "method": run["method"], **r} for r in stock_rows]
         picks_md += ["", f"### {t} · {run['method']}", "", _markdown(pd.DataFrame(stock_rows))]
-        traits_md += ["", f"### {t} · {run['method']}", "", *qd_traits(entries)]
+        traits_md += ["", f"### {t} · {run['method']}", "", *qd_traits(entries, driver_of)]
 
     df = pd.DataFrame(rows)
     num = df.drop(columns=["t", "portfolio"], errors="ignore")

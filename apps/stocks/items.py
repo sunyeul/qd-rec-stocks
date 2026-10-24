@@ -238,10 +238,17 @@ def item_text(row: dict) -> str:
 
 
 def archive_text(row: dict, hypothesis) -> str:
-    """Text embedded as entry["embedding"]: the card plus the investment thesis."""
+    """Text embedded as entry["embedding"]: a one-line stock header plus the thesis.
+
+    Not the whole card: the card is several times longer than a thesis, so two
+    theses on one stock embedded with it came out at cosine 0.99 whatever they
+    argued, and the novelty check never let a second idea on a stock in.
+    The card itself is embedded for the bandit (embedding_text).
+    """
     if not isinstance(hypothesis, str):
         hypothesis = json.dumps(hypothesis, ensure_ascii=False)
-    return f"{item_text(row)}\n\nInvestment thesis:\n{hypothesis}"
+    header = f"Stock: {item_label(row)}, {row.get('sector') or 'N/A'}"
+    return f"{header}\n\nInvestment thesis:\n{hypothesis}"
 
 
 def embedding_text(row: dict) -> str:

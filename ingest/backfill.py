@@ -150,13 +150,22 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     dates = sorted(clock.parse_date(s) for s in args.dates.split(","))
 
-    # shortcut: today's members for every past t (survivorship bias); all methods share it.
-    members = universe.collect(args.universe_file)
-    tickers = members["ticker"].tolist()
-    cache = _raw_cache(tickers)
-    closes = _raw_closes(tickers + [config.BENCHMARK_TICKER], dates[0] - timedelta(days=400), dates[-1])
+    # Each t gets the S&P 100 as Wikipedia listed it at t's close (no survivorship bias),
+    # unless a fixed universe file is given.
+    members_at = {}
+    for t in dates:
+        if args.universe_file:
+            members_at[t] = universe.collect(args.universe_file)
+        else:
+            members_at[t], rev = universe.fetch_sp100_asof(clock.cutoff(t))
+            members_at[t]["source"] = f"{config.UNIVERSE_URL} (revision {rev})"
+    all_tickers = sorted({tk for m in members_at.values() for tk in m["ticker"]})
+    cache = _raw_cache(all_tickers)
+    closes = _raw_closes(all_tickers + [config.BENCHMARK_TICKER], dates[0] - timedelta(days=400), dates[-1])
 
     for t in dates:
+        members = members_at[t]
+        tickers = members["ticker"].tolist()
         if not snapshot.exists("news", t) or args.overwrite:
             snapshot.write(news_history.collect(members, t), "news", t, overwrite=args.overwrite)
         if snapshot.exists("fundamentals", t) and not args.overwrite:
@@ -167,7 +176,7 @@ def main(argv=None) -> int:
         rows = []
         for tk in tickers:
             row = (fundamentals_asof(cache[tk], t, closes[tk], closes[config.BENCHMARK_TICKER])
-                   if tk in cache and tk in closes else {"error": "no history"})
+                   if tk in cache and tk in closes.columns else {"error": "no history"})
             rows.append({**row, "ticker": tk, "fetched_at": f"reconstructed as of {t}"})
         df = pd.DataFrame(rows)
         snapshot.write(df, "fundamentals", t, overwrite=args.overwrite)
