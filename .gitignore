@@ -9,13 +9,7 @@ apps/*/data/*
 # the archive viewer's page template (the repository root ignores *.html)
 !shared/view_archive.html
 
-# qd-rec-stocks
-data/snapshots/
-data/logs/
-archives/
+# qd-rec-stocks: generated data and the private profile file
+data/
 *.parquet
 apps/stocks/profiles_private.py
-data/cards/
-data/backtest/
-data/backtest500/
-archives/backtest500/
